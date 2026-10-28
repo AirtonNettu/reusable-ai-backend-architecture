@@ -24,6 +24,7 @@ O **Reusable AI Backend Architecture** não é um mero *wrapper* de chamadas HTT
    - Endpoints com validação Pydantic e defesas contra DoS: `/health`, `/v1/modelos`, `/v1/chat/conclusoes` (com streaming SSE), `/v1/chat/estruturado` (JSON Schema rigoroso com autorreparo) e `/v1/agentes/executar`.
    - Middlewares globais para rastreamento (`X-Request-ID`, `X-Process-Time`) e mapeamento de exceções de domínio para respostas padronizadas (RFC 7807).
    - Autenticação e identificação multilocatário com **Proteção Anti-Spoofing** via `X-API-Key`, `Authorization: Bearer` e `X-User-ID` auditado.
+   - Ciclo de vida assíncrono com aplicação automática e idempotente de migrações do PostgreSQL no startup.
 
 ---
 
@@ -92,37 +93,61 @@ flowchart TD
 
 ---
 
-### 3. Stack Tecnológico
+### 3. Stack Tecnológico e Infraestrutura
 
 - **Python**: 3.13
 - **FastAPI**: 0.159+
 - **Pydantic**: 2.14+
 - **HTTPX**: 0.28+
+- **asyncpg**: 0.32+
+- **PostgreSQL**: 17 (imagem oficial `postgres:17-alpine`)
+- **Docker & Docker Compose**: Multi-stage build com usuário não-root (`appuser`), redes isoladas e perfis opcionais (Ollama)
 - **uv**: Gerenciador de workspaces e pacotes
-- **pytest & pytest-asyncio**: Suíte automatizada de testes (87 cenários: 83 testes unitários/simulados e 4 de integração física com PostgreSQL 17 real)
+- **pytest & pytest-asyncio**: Suíte automatizada de testes (94 cenários: 90 unitários/simulados/infraestrutura e 4 de integração física com PostgreSQL 17 real)
 - **Ruff**: Linter e formatador de código estático
 
 ---
 
 ### 4. Instalação e Execução
 
+#### Opção A: Execução Local via Docker Compose (Recomendado)
+
+```bash
+# 1. Configurar variáveis de ambiente a partir do exemplo documentado
+cp .env.example .env
+
+# 2. Inicializar o AI Gateway e o PostgreSQL 17 em segundo plano
+docker compose up -d
+
+# 3. Inicializar incluindo o servidor opcional de inferência local Ollama
+docker compose --profile ollama up -d
+
+# 4. Verificar o estado dos contêineres e healthchecks
+docker compose ps
+
+# 5. Acompanhar os logs do AI Gateway em tempo real
+docker compose logs -f ai-gateway
+
+# 6. Encerrar os serviços preservando os volumes de dados
+docker compose down
+```
+
+Para mais detalhes sobre volumes, variáveis e portas, consulte o [Guia de Infraestrutura](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/infraestrutura.md).
+
+#### Opção B: Desenvolvimento Nativo com uv
+
 ```bash
 # 1. Sincronizar workspace e dependências
 uv sync --all-packages
 
-# 2. Executar suíte de testes (83 testes locais imediatos com skip gracioso para o banco físico inativo)
+# 2. Executar suíte completa de testes automatizados
 uv run pytest -v
 
-# 3. Executar testes de integração física com contêiner PostgreSQL 17 local descartável
-docker run -d --name pg-teste -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
-uv run pytest tests/test_integracao_postgresql_real.py -v
-docker rm -f pg-teste
-
-# 4. Executar verificações de linter e formatação
+# 3. Executar verificações de linter e formatação estrita
 uv run ruff check .
 uv run ruff format --check .
 
-# 5. Iniciar o AI Gateway em desenvolvimento
+# 4. Iniciar o AI Gateway em desenvolvimento
 uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -148,25 +173,27 @@ uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
    - Endpoints: `/health`, `/v1/modelos` (catalog), `/v1/chat/conclusoes` (synchronous & SSE streaming), `/v1/chat/estruturado` (JSON Schema with auto-repair), and `/v1/agentes/executar`.
    - Global tracking middleware (`X-Request-ID`, `X-Process-Time`) and RFC 7807 problem detail handlers.
    - Multi-tenant authentication with **Anti-Spoofing Security** (`X-API-Key`, `Authorization: Bearer`, audited `X-User-ID`).
+   - Asynchronous lifecycle management with automated idempotent PostgreSQL migrations on startup.
 
-### 2. Quickstart
+### 2. Infrastructure & Local Orchestration
+
+The platform provides a production-hardened local environment orchestrated with **Docker Compose**:
+- **Multi-Stage Dockerfile**: Fast builds using `uv`, producing minimal runtime images based on `python:3.13-slim` running under non-root user `appuser` (UID `10001`).
+- **PostgreSQL 17 Alpine**: Isolated database service with persistent volume (`ia_dados_postgresql`), healthchecks, and internal bridge network (`ia_rede_interna`).
+- **Ollama**: Optional local model inference service activated via profile (`--profile ollama`).
 
 ```bash
-# Install and synchronize
-uv sync --all-packages
+# 1. Prepare environment file
+cp .env.example .env
 
-# Run full test suite (87 tests: 83 unit/mocked, 4 physical PostgreSQL integration tests)
-uv run pytest -v
+# 2. Run core stack (AI Gateway + PostgreSQL 17)
+docker compose up -d
 
-# Run physical PostgreSQL tests with disposable container
-docker run -d --name pg-teste -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
-uv run pytest tests/test_integracao_postgresql_real.py -v
-docker rm -f pg-teste
+# 3. Check health and services status
+docker compose ps
 
-# Check linter and formatting
-uv run ruff check .
-uv run ruff format --check .
-
-# Start development server
-uv run uvicorn ai_gateway.main:app --port 8000 --reload
+# 4. Tear down services (preserving volumes)
+docker compose down
 ```
+
+For complete technical specifications, see [docs/infraestrutura.md](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/infraestrutura.md) and [ADR 0008](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md).

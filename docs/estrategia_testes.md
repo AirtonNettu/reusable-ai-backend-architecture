@@ -15,7 +15,12 @@ Este documento descreve a pirâmide de testes, metodologia de garantia de qualid
    - **Testes de Integração Física Real (`test_integracao_postgresql_real.py`)**: Conectam-se a uma instância ativa de banco de dados PostgreSQL 17 via driver `asyncpg` real. Exercitam conexões físicas TCP, criação real de esquemas e tabelas (`schema_migracoes`, `conversas_proprietarios`, `mensagens_conversa`), rollback em falhas de transação, concorrência massiva com `asyncio.gather` e controle anti-IDOR.
    - **Garantia em CI**: No pipeline de CI, o teste físico é **obrigatório** (`POSTGRES_OBRIGATORIO=true`), alimentado por um contêiner de serviço PostgreSQL 17 oficial. Em desenvolvimento local, quando a porta 5432 não estiver ativa, os testes físicos são marcados como *skipped* informativamente, sem mascarar falhas no pipeline.
 
-3. **Cobertura Multicamada**:
+3. **Validação Estática e de Contratos de Infraestrutura (`test_infraestrutura_e_migracoes.py`)**:
+   - Validação automatizada da especificação do `Dockerfile` multi-stage (usuário não-root, imagens mínimas, healthchecks).
+   - Validação da arquitetura do `docker-compose.yml` (perfis opcionais, ausência de portas expostas indevidamente para o banco de dados, volumes nomeados).
+   - Validação do ciclo de vida assíncrono do Gateway e execução de migrações idempotentes via CLI (`ai_gateway.migrar`).
+
+4. **Cobertura Multicamada**:
    - **Camada de Domínio**: Modelos imutáveis, dataclasses, contratos de ferramenta, exceções e validação JSON Schema com `$defs` e `$ref`.
    - **Camada de Resiliência**: Disjuntor (Circuit Breaker), retentativas com jitter, semáforo, limitador de taxa, reserva de tokens em duas fases e fallback.
    - **Camada de Adaptadores**: Provedores LLM, memória conversacional volátil, SQLite (WAL) e PostgreSQL assíncrono com pool e migrações versionadas, ferramentas, segurança e observabilidade.
@@ -39,6 +44,7 @@ Este documento descreve a pirâmide de testes, metodologia de garantia de qualid
 | `tests/test_memoria_sqlite.py` | Persistência assíncrona SQLite em memória e em arquivo físico com fechamento seguro. | 2 |
 | `tests/test_memoria_postgresql.py` | Persistência assíncrona PostgreSQL com pool simulado, transações ACID, migrações versionadas e isolamento de usuários. | 5 |
 | `tests/test_integracao_postgresql_real.py` | Testes de integração física com PostgreSQL 17 real: gravação/leitura, rollback em transação, concorrência massiva e idempotência de migrações. | 4 |
+| `tests/test_infraestrutura_e_migracoes.py` | Validação de especificações do Dockerfile, Compose, `.dockerignore`, ciclo de vida FastAPI e CLI de migração. | 7 |
 | `tests/test_roteador_modelos.py` | Catálogo de modelos, seleção por capacidade e fallback automático entre provedores. | 2 |
 | `tests/test_orquestrador_agente.py` | Ciclo ReAct completo com ferramentas, salvaguarda contra loops infinitos e limites. | 2 |
 | `tests/test_saidas_estruturadas.py` | Geração com Pydantic, parsing com limpeza de markdown e autorreparo de JSON inválido. | 2 |
@@ -50,14 +56,14 @@ Este documento descreve a pirâmide de testes, metodologia de garantia de qualid
 | `tests/test_auditoria_identidade_e_seguranca.py` | Prevenção de falsificação de identidade (Anti-Spoofing de X-User-ID), delegação M2M, validação fail-closed em produção, rejeição de ambientes desconhecidos e autenticação negativa. | 12 |
 | `tests/test_gateway_api.py` | Rotas FastAPI: `/health`, `/v1/modelos`, `/v1/chat/conclusoes` (síncrono e SSE streaming), `/v1/chat/estruturado`, `/v1/agentes/executar`, autenticação e RFC 7807. | 8 |
 | `tests/test_integracao_fluxo_completo.py` | Fluxo completo Gateway -> Caso de Uso -> Roteador -> SQLite; Isolamento Multilocatário (403 Forbidden); Resiliência e Fallback sob concorrência; Chat estruturado complexo. | 4 |
-| **Total** | **Suíte Automatizada Completa** | **87 cenários** |
+| **Total** | **Suíte Automatizada Completa** | **94 cenários** |
 
 ---
 
 ## 3. Comandos de Execução
 
 ```bash
-# 1. Executar todos os testes locais (unitários e simulados com skip gracioso para o banco físico se inativo)
+# 1. Executar todos os testes locais (unitários, infraestrutura e simulados com skip gracioso para o banco físico se inativo)
 uv run pytest -v
 
 # 2. Executar contêiner PostgreSQL 17 local descartável para testes de integração física

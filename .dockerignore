@@ -1,0 +1,31 @@
+# Controle de versão e metadados
+.git
+.github
+.gitignore
+
+# Ambientes virtuais e pacotes locais
+.venv
+venv/
+env/
+
+# Caches do Python e compilados
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.sqlite3
+*.db
+
+# Segredos locais e configurações de ambiente
+.env
+.env.*
+!.env.example
+
+# Documentação pesada e logs
+*.log
+docs/

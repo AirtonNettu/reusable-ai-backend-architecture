@@ -1,0 +1,91 @@
+services:
+  # ----------------------------------------------------------------------------
+  # Banco de Dados Relacional - Persistência Conversacional (PostgreSQL 17)
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: ia-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ia_conversas}
+      POSTGRES_USER: ${POSTGRES_USER:-usuario_ia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-senha_ia_local}
+    # Por padrão de segurança corporativa, a porta do banco NÃO é publicada no host.
+    # Para inspecionar o banco diretamente na máquina hospedeira durante desenvolvimento,
+    # descomente o bloco de portas abaixo:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    volumes:
+      - dados_postgresql:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-usuario_ia} -d ${POSTGRES_DB:-ia_conversas}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - rede_ia
+
+  # ----------------------------------------------------------------------------
+  # HTTP AI Gateway - Camada de Borda, Roteamento e Orquestração
+  # ----------------------------------------------------------------------------
+  ai-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: reusable-ai-gateway:latest
+    container_name: ia-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORTA:-8000}:8000"
+    environment:
+      GATEWAY_AMBIENTE: ${GATEWAY_AMBIENTE:-desenvolvimento}
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-dev-local-master-key-12345678}
+      GATEWAY_CHAVES_CONFIAVEIS: ${GATEWAY_CHAVES_CONFIAVEIS:-dev-service-m2m-key-12345678}
+      GATEWAY_PERMITIR_DELEGACAO_M2M: ${GATEWAY_PERMITIR_DELEGACAO_M2M:-true}
+      GATEWAY_MODELO_PADRAO: ${GATEWAY_MODELO_PADRAO:-modelo-teste}
+      GATEWAY_TIMEOUT_SEGUNDOS: ${GATEWAY_TIMEOUT_SEGUNDOS:-60.0}
+      GATEWAY_MEMORIA_TIPO: postgresql
+      GATEWAY_POSTGRES_URL: postgresql://${POSTGRES_USER:-usuario_ia}:${POSTGRES_PASSWORD:-senha_ia_local}@postgres:5432/${POSTGRES_DB:-ia_conversas}
+      GATEWAY_POSTGRES_POOL_SIZE: ${GATEWAY_POSTGRES_POOL_SIZE:-10}
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rede_ia
+
+  # ----------------------------------------------------------------------------
+  # Servidor de Inferência Local Opcional (Ollama)
+  # Ativado exclusivamente sob demanda via perfil: docker compose --profile ollama up
+  # Não executa download automático de modelos pesados sem ação do operador.
+  # ----------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ia-ollama
+    restart: unless-stopped
+    profiles:
+      - ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - dados_ollama:/root/.ollama
+    networks:
+      - rede_ia
+
+volumes:
+  dados_postgresql:
+    name: ia_dados_postgresql
+  dados_ollama:
+    name: ia_dados_ollama
+
+networks:
+  rede_ia:
+    name: ia_rede_interna
+    driver: bridge

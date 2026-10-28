@@ -99,7 +99,7 @@ flowchart TD
 - **Pydantic**: 2.14+
 - **HTTPX**: 0.28+
 - **uv**: Gerenciador de workspaces e pacotes
-- **pytest & pytest-asyncio**: Suíte automatizada de testes (78 testes implementados: 77 aprovados e 1 de integração real com PostgreSQL aguardando Docker)
+- **pytest & pytest-asyncio**: Suíte automatizada de testes (81 cenários: 77 testes unitários/simulados e 4 de integração física com PostgreSQL 17 real)
 - **Ruff**: Linter e formatador de código estático
 
 ---
@@ -110,14 +110,19 @@ flowchart TD
 # 1. Sincronizar workspace e dependências
 uv sync --all-packages
 
-# 2. Executar suíte de testes (77 testes unitários e de integração)
+# 2. Executar suíte de testes (77 testes locais imediatos com skip gracioso para o banco físico inativo)
 uv run pytest -v
 
-# 3. Executar verificações de linter e formatação
+# 3. Executar testes de integração física com contêiner PostgreSQL 17 local descartável
+docker run -d --name pg-teste -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+uv run pytest tests/test_integracao_postgresql_real.py -v
+docker rm -f pg-teste
+
+# 4. Executar verificações de linter e formatação
 uv run ruff check .
 uv run ruff format --check .
 
-# 4. Iniciar o AI Gateway em desenvolvimento
+# 5. Iniciar o AI Gateway em desenvolvimento
 uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -150,8 +155,13 @@ uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
 # Install and synchronize
 uv sync --all-packages
 
-# Run full test suite (78 tests: 77 passed, 1 real PostgreSQL test awaiting Docker)
+# Run full test suite (81 tests: 77 unit/mocked, 4 physical PostgreSQL integration tests)
 uv run pytest -v
+
+# Run physical PostgreSQL tests with disposable container
+docker run -d --name pg-teste -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+uv run pytest tests/test_integracao_postgresql_real.py -v
+docker rm -f pg-teste
 
 # Check linter and formatting
 uv run ruff check .

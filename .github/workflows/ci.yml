@@ -11,6 +11,21 @@ jobs:
     name: Verificação de Qualidade e Testes Automatizados
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: postgres_teste
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout do Código
         uses: actions/checkout@v4
@@ -33,5 +48,8 @@ jobs:
       - name: Executar Linter e Regras Estáticas (Ruff Check)
         run: uv run ruff check .
 
-      - name: Executar Bateria de Testes Automatizados (Pytest)
+      - name: Executar Bateria de Testes Automatizados (Pytest com PostgreSQL 17 Real)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres_ci_password@localhost:5432/postgres_teste
+          POSTGRES_OBRIGATORIO: "true"
         run: uv run pytest -v

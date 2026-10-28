@@ -134,6 +134,25 @@ Para detalhes completos e exemplos de integração com Prometheus e Grafana, con
 
 ---
 
+
+---
+
+### 5. Aplicação Piloto e Interface de Referência (BFF)
+
+A arquitetura inclui uma aplicação piloto interativa e responsiva servida diretamente pelo AI Gateway em:
+`	ext
+http://localhost:8000/piloto
+`
+
+Principais recursos demonstrados:
+- **Zero Frameworks Pesados**: Implementada em HTML5, CSS3 moderno e Vanilla JavaScript (SPA nativa, sem Node.js/npm).
+- **Camada Intermediária Segura (BFF)**: O navegador nunca recebe ou manipula chaves mestras (GATEWAY_API_KEY) ou strings de conexão SQL.
+- **Persistência Relacional**: Diálogo mantido e recuperado do **PostgreSQL 17**, resistindo a reinicializações.
+- **Multilocatário e Anti-IDOR**: Alternador de perfis (usuario_alfa e usuario_beta) que comprova o bloqueio relacional com 403 Forbidden.
+- **Telemetria Visível**: Exibição em tempo real do X-Request-ID, tempo de latência, contagem de tokens e atalho para /metrics.
+
+Para instruções completas e cenários de teste, consulte o [docs/aplicacao_piloto.md](docs/aplicacao_piloto.md) e a [ADR 0010](docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md).
+
 ## 🇺🇸 English
 
 ### 1. Overview
@@ -183,3 +202,22 @@ docker compose down
 ```
 
 For complete technical specifications, see [docs/infraestrutura.md](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/infraestrutura.md), [docs/observabilidade.md](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/observabilidade.md), [ADR 0008](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md), and [ADR 0009](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0009-observabilidade-prometheus-opentelemetry-e-rastreamento-distribuido.md).
+
+---
+
+### 3. Pilot Application & Reference UI (BFF)
+
+An interactive, responsive pilot application is served directly by the AI Gateway at:
+`	ext
+http://localhost:8000/piloto
+`
+
+Key features demonstrated:
+- **Lightweight Architecture**: Single Page Application built with HTML5, modern CSS, and Vanilla JavaScript with zero Node/npm overhead.
+- **Secure Backend-For-Frontend (BFF)**: Browser never receives master API keys or database connection strings.
+- **Relational Memory**: Chat continuity backed by **PostgreSQL 17**, surviving service restarts.
+- **Multi-Tenant IDOR Prevention**: Switch between usuario_alfa and usuario_beta to verify tenant isolation and access controls.
+- **Diagnostic Telemetry**: Displays X-Request-ID, latency (ms), token usage, and quick links to /metrics.
+
+For full documentation, see [docs/aplicacao_piloto.md](docs/aplicacao_piloto.md) and [ADR 0010](docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md).
+

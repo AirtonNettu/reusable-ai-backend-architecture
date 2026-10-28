@@ -83,3 +83,41 @@ A execução autônoma de ferramentas por modelos de IA apresenta riscos de *Pro
 2. **Reserva Atômica de Cotas (Anti-Race Condition)**:
    - A `PoliticaOrcamentoTokens` impede que múltiplos disparos simultâneos explorem janelas de concorrência (TOCTOU).
    - Os tokens são reservados atimicamente sob lock antes da invocação do modelo, e liberados automaticamente caso a requisição falhe por timeout ou erro do provedor externo.
+
+---
+
+## 7. Governança de Credenciais e Modo Fail-Closed em Produção
+
+1. **Inicialização Segura (Fail-Closed)**:
+   - Quando configurado com `ambiente="producao"` (`GATEWAY_AMBIENTE=producao`), o Gateway executa validação estrita no startup (`validar_seguranca_producao`).
+   - A inicialização é abortada imediatamente caso não haja credenciais configuradas ou caso sejam fornecidas chaves padrão/demonstração (como `chave-teste-padrao`, `chave-servico-confiavel`, `admin`, `secret`, etc.) ou com entropia insuficiente (< 16 caracteres), tanto para chaves mestres quanto para serviços confiáveis M2M.
+2. **Rejeição de Ambientes Desconhecidos (Sem Fallback Silencioso)**:
+   - A configuração inspeciona `GATEWAY_AMBIENTE`, `ENVIRONMENT` ou `APP_ENV` contra a lista restrita de ambientes permitidos (`producao`, `desenvolvimento`, `teste`, `homologacao`).
+   - Qualquer valor divergente, não reconhecido ou com erros de digitação (ex: `prod_typo`) aborta imediatamente a carga com `ValueError`, impedindo o fallback silencioso para o modo permissivo de desenvolvimento.
+3. **Validação em Tempo de Execução**:
+   - Toda requisição recebida em ambiente de produção é inspecionada: chaves de demonstração são rejeitadas com HTTP 401 Unauthorized, sem expor o valor da chave em mensagens de erro ou logs de auditoria.
+4. **Procedimento de Geração Criptográfica Segura de Credenciais**:
+   - As credenciais de produção **devem** ser geradas através de gerador de números pseudoaleatórios criptograficamente seguro (CSPRNG).
+   - Comandos recomendados para geração (sem expor segredos no repositório):
+     ```bash
+     # Gerar chave com 256 bits de entropia (32 bytes em formato URL-safe base64)
+     python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+     # Alternativa via OpenSSL (hexadecimal de 256 bits)
+     openssl rand -hex 32
+     ```
+   - As chaves geradas devem ser injetadas exclusivamente por variáveis de ambiente (`GATEWAY_API_KEY`, `GATEWAY_CHAVES_CONFIAVEIS`) ou cofres de segredos gerenciados (HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager), nunca salvas no código-fonte.
+5. **Preservação do Modo de Desenvolvimento**:
+   - Em `ambiente="desenvolvimento"`, o Gateway mantém tolerância a chaves locais demonstrativas para permitir testes rápidos sem complexidade desnecessária.
+
+---
+
+## 8. Riscos Operacionais Documentados e Limitações de Escala
+
+1. **Orçamento e Rate Limiting Confinados à Memória Local**:
+   - A `PoliticaOrcamentoTokens` e o `LimitadorTaxa` utilizam estruturas atômicas locais sincronizadas via `asyncio.Lock()`.
+   - **Atenção**: Esta implementação protege com exatidão a concorrência intraprocesso em monólito com uma réplica. Em topologias com **múltiplas réplicas/pods ou múltiplos workers**, as cotas e limites são particionados por processo, não garantindo um teto orçamentário global consolidado entre nós distintos.
+   - Para assegurar quotas rígidas em clusters horizontais, deve-se planejar a adoção de uma porta de coordenação de estado distribuído (ex: Redis ou advisory locks em PostgreSQL) no roadmap de escala.
+2. **Limites Configuráveis do Pool de Conexões PostgreSQL**:
+   - A persistência assíncrona (`MemoriaPostgresql`) utiliza limites configuráveis: `min_conexoes` (padrão: 2) e `max_conexoes` (padrão: 10, parametrizável via `GATEWAY_POSTGRES_POOL_SIZE` ou construtor).
+   - Ao dimensionar o número de réplicas do AI Gateway em produção, o arquiteto de infraestrutura deve calcular: `Total Conexões = Réplicas * GATEWAY_POSTGRES_POOL_SIZE` para evitar esgotamento de `max_connections` no servidor PostgreSQL, sendo recomendado o uso de PgBouncer em implantações de grande porte.

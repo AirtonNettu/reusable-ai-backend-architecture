@@ -47,10 +47,10 @@ Este documento descreve a pirâmide de testes, metodologia de garantia de qualid
 | `tests/test_validador_esquema.py` | Validação de JSON Schema com `$defs`, `$ref`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength` e conformidade de dados. | 5 |
 | `tests/test_orcamento_tokens.py` | Limite orçamentário por requisição, sessão, usuário, reserva em duas fases e cancelamento de reserva em falhas. | 7 |
 | `tests/test_seguranca_concorrencia_e_sanitizacao.py` | Concorrência massiva SQLite WAL, sanitização de logs, defesas DoS de borda e validação rigorosa de esquemas. | 6 |
-| `tests/test_auditoria_identidade_e_seguranca.py` | Prevenção de falsificação de identidade (Anti-Spoofing de X-User-ID), delegação M2M e autenticação negativa. | 6 |
+| `tests/test_auditoria_identidade_e_seguranca.py` | Prevenção de falsificação de identidade (Anti-Spoofing de X-User-ID), delegação M2M, validação fail-closed em produção, rejeição de ambientes desconhecidos e autenticação negativa. | 12 |
 | `tests/test_gateway_api.py` | Rotas FastAPI: `/health`, `/v1/modelos`, `/v1/chat/conclusoes` (síncrono e SSE streaming), `/v1/chat/estruturado`, `/v1/agentes/executar`, autenticação e RFC 7807. | 8 |
 | `tests/test_integracao_fluxo_completo.py` | Fluxo completo Gateway -> Caso de Uso -> Roteador -> SQLite; Isolamento Multilocatário (403 Forbidden); Resiliência e Fallback sob concorrência; Chat estruturado complexo. | 4 |
-| **Total** | **Suíte Automatizada Completa** | **81 cenários** |
+| **Total** | **Suíte Automatizada Completa** | **87 cenários** |
 
 ---
 

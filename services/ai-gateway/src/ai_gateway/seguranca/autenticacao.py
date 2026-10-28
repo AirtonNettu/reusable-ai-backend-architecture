@@ -6,7 +6,10 @@ from typing import Self
 
 from fastapi import Header, HTTPException, Request, status
 
-from ai_gateway.configuracoes import ConfiguracoesGateway
+from ai_gateway.configuracoes import (
+    CHAVES_DEMONSTRACAO_INSEGURAS,
+    ConfiguracoesGateway,
+)
 
 PADRAO_IDENTIFICADOR_SEGURO = re.compile(r"^[a-zA-Z0-9_\-\.:@]{1,128}$")
 
@@ -73,8 +76,13 @@ class ValidadorAutenticacao:
 
         locatario = x_tenant_id or "padrao"
 
-        # Modo desenvolvimento sem chave configurada
+        # Modo desenvolvimento sem chave configurada (estritamente bloqueado em produção - fail closed)
         if not config.chave_api_mestre and not config.mapeamento_chaves_usuarios:
+            if config.e_producao:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Erro de configuração: o Gateway em produção não aceita conexões sem autenticação configurada.",
+                )
             id_final = x_user_id or x_api_key or "desenvolvedor_local"
             return IdentidadeAutenticada(
                 id_usuario=id_final,
@@ -91,6 +99,18 @@ class ValidadorAutenticacao:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Credencial ausente nos cabeçalhos X-API-Key ou Authorization.",
             )
+
+        # Em produção, rejeita credenciais conhecidas de demonstração ou com baixa entropia
+        if config.e_producao:
+            token_limpo = token_enviado.strip()
+            if (
+                token_limpo.lower() in CHAVES_DEMONSTRACAO_INSEGURAS
+                or len(token_limpo) < 16
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Credencial rejeitada: o ambiente de produção não aceita chaves de demonstração ou com baixa entropia.",
+                )
 
         e_chave_mestre = (
             config.chave_api_mestre is not None

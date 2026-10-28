@@ -99,7 +99,7 @@ flowchart TD
 - **Pydantic**: 2.14+
 - **HTTPX**: 0.28+
 - **uv**: Gerenciador de workspaces e pacotes
-- **pytest & pytest-asyncio**: Suíte automatizada de testes (81 cenários: 77 testes unitários/simulados e 4 de integração física com PostgreSQL 17 real)
+- **pytest & pytest-asyncio**: Suíte automatizada de testes (87 cenários: 83 testes unitários/simulados e 4 de integração física com PostgreSQL 17 real)
 - **Ruff**: Linter e formatador de código estático
 
 ---
@@ -110,7 +110,7 @@ flowchart TD
 # 1. Sincronizar workspace e dependências
 uv sync --all-packages
 
-# 2. Executar suíte de testes (77 testes locais imediatos com skip gracioso para o banco físico inativo)
+# 2. Executar suíte de testes (83 testes locais imediatos com skip gracioso para o banco físico inativo)
 uv run pytest -v
 
 # 3. Executar testes de integração física com contêiner PostgreSQL 17 local descartável
@@ -155,7 +155,7 @@ uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
 # Install and synchronize
 uv sync --all-packages
 
-# Run full test suite (81 tests: 77 unit/mocked, 4 physical PostgreSQL integration tests)
+# Run full test suite (87 tests: 83 unit/mocked, 4 physical PostgreSQL integration tests)
 uv run pytest -v
 
 # Run physical PostgreSQL tests with disposable container

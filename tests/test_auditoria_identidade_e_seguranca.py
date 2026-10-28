@@ -194,3 +194,100 @@ async def test_bloqueio_delegacao_m2m_quando_desabilitada() -> None:
         )
         assert resposta.status_code == 403
         assert "desabilitada" in resposta.json()["detail"].lower()
+
+
+def test_producao_rejeita_inicializacao_sem_chaves_fail_closed() -> None:
+    """Verifica que o Gateway em modo de produção rejeita inicialização sem chaves configuradas (fail-closed)."""
+    config = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre=None,
+        mapeamento_chaves_usuarios={},
+    )
+    with pytest.raises(ValueError, match="exige a definição explícita"):
+        config.validar_seguranca_producao()
+
+
+def test_producao_rejeita_chaves_inseguras_ou_demonstracao() -> None:
+    """Valida rejeição de chaves padrão, de demonstração ou com baixa entropia em produção."""
+    # Chave padrão de demonstração
+    config_demo = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre="chave-teste-padrao",
+    )
+    with pytest.raises(ValueError, match="demonstração"):
+        config_demo.validar_seguranca_producao()
+
+    # Chave com baixa entropia (< 16 caracteres)
+    config_curta = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre="curta123",
+    )
+    with pytest.raises(ValueError, match="no mínimo 16 caracteres"):
+        config_curta.validar_seguranca_producao()
+
+
+def test_producao_inicializacao_com_sucesso_chave_alta_entropia() -> None:
+    """Confirma que credenciais com entropia adequada inicializam com sucesso em produção."""
+    config_valida = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre="prod-super-segredo-de-alta-entropia-123456",
+        chaves_servicos_confiaveis=("prod-servico-confiavel-robusto-987654",),
+    )
+    # Não deve levantar exceção
+    config_valida.validar_seguranca_producao()
+    assert config_valida.e_producao is True
+
+
+@pytest.mark.asyncio
+async def test_producao_rejeita_credencial_insegura_no_runtime() -> None:
+    """Garante que requisições em produção rejeitam chaves de demonstração sem vazar dados no log."""
+    config = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre="prod-super-segredo-de-alta-entropia-123456",
+    )
+    app = criar_aplicacao_gateway(configuracoes=config)
+    transporte = ASGITransport(app=app)
+
+    corpo = {
+        "modelo": "gpt-4o",
+        "mensagens": [{"papel": "usuario", "conteudo": "Teste"}],
+    }
+
+    async with AsyncClient(transport=transporte, base_url="http://teste") as cliente:
+        # Tenta utilizar chave de teste de demonstração em runtime
+        resposta = await cliente.post(
+            "/v1/chat/conclusoes",
+            json=corpo,
+            headers={"X-API-Key": "chave-teste-padrao"},
+        )
+        assert resposta.status_code == 401
+        assert "não aceita chaves de demonstração" in resposta.json()["detail"]
+        # Garante que o valor da credencial não foi exposto na mensagem de erro
+        assert "chave-teste-padrao" not in resposta.text
+
+
+def test_rejeicao_ambiente_desconhecido_sem_fallback_silencioso() -> None:
+    """Verifica que valores desconhecidos de ambiente são rejeitados sem fallback silencioso."""
+    with pytest.raises(ValueError, match="não é reconhecido"):
+        ConfiguracoesGateway(ambiente="ambiente_inexistente_ou_invalido")
+
+
+def test_producao_rejeita_chaves_servicos_m2m_inseguras_ou_demonstracao() -> None:
+    """Verifica validação de segurança estrita aplicada também a chaves de serviços confiáveis M2M."""
+    # Chave M2M de demonstração
+    config_m2m_demo = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre="prod-super-segredo-de-alta-entropia-123456",
+        chaves_servicos_confiaveis=("chave-servico-confiavel",),
+    )
+    with pytest.raises(ValueError, match="serviços confiáveis"):
+        config_m2m_demo.validar_seguranca_producao()
+
+    # Chave M2M curta
+    config_m2m_curta = ConfiguracoesGateway(
+        ambiente="producao",
+        chave_api_mestre="prod-super-segredo-de-alta-entropia-123456",
+        chaves_servicos_confiaveis=("m2m_curto",),
+    )
+    with pytest.raises(ValueError, match="no mínimo 16 caracteres"):
+        config_m2m_curta.validar_seguranca_producao()

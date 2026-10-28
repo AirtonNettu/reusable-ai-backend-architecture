@@ -20,6 +20,7 @@ def criar_aplicacao(
 ) -> FastAPI:
     """Fábrica de aplicação FastAPI com middlewares e roteadores integrados."""
     config = configuracoes or ConfiguracoesGateway.carregar_do_ambiente()
+    config.validar_seguranca_producao()
 
     aplicacao = FastAPI(
         title=config.titulo,

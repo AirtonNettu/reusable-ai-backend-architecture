@@ -3,6 +3,41 @@
 import os
 from dataclasses import dataclass, field
 
+AMBIENTES_PRODUCAO: frozenset[str] = frozenset({"producao", "production", "prod"})
+AMBIENTES_DESENVOLVIMENTO: frozenset[str] = frozenset(
+    {"desenvolvimento", "development", "dev"}
+)
+AMBIENTES_TESTE: frozenset[str] = frozenset({"teste", "test", "testing"})
+AMBIENTES_HOMOLOGACAO: frozenset[str] = frozenset({"homologacao", "staging", "stage"})
+
+AMBIENTES_RECONHECIDOS: frozenset[str] = (
+    AMBIENTES_PRODUCAO
+    | AMBIENTES_DESENVOLVIMENTO
+    | AMBIENTES_TESTE
+    | AMBIENTES_HOMOLOGACAO
+)
+
+CHAVES_DEMONSTRACAO_INSEGURAS: frozenset[str] = frozenset(
+    {
+        "chave-teste-padrao",
+        "chave-servico-confiavel",
+        "chave-mestre-teste",
+        "chave-secreta-teste",
+        "teste",
+        "test",
+        "dev",
+        "desenvolvimento",
+        "admin",
+        "root",
+        "secret",
+        "password",
+        "123456",
+        "12345678",
+        "default",
+        "padrao",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ConfiguracoesGateway:
@@ -13,6 +48,7 @@ class ConfiguracoesGateway:
     descricao: str = (
         "HTTP Gateway para plataforma corporativa de Inteligência Artificial."
     )
+    ambiente: str = "desenvolvimento"
     chave_api_mestre: str | None = None
     chaves_servicos_confiaveis: tuple[str, ...] = ()
     permitir_delegacao_m2m: bool = True
@@ -24,9 +60,90 @@ class ConfiguracoesGateway:
     url_conexao_postgresql: str | None = None
     limite_conexoes_postgresql: int = 10
 
+    def __post_init__(self) -> None:
+        """Valida que o ambiente configurado é reconhecido, evitando fallback silencioso."""
+        self.validar_ambiente(self.ambiente)
+
+    @classmethod
+    def validar_ambiente(cls, ambiente: str) -> str:
+        """Valida e normaliza o identificador de ambiente operacional."""
+        if not ambiente or not ambiente.strip():
+            raise ValueError(
+                "Configuração inválida: o identificador de ambiente não pode ser vazio."
+            )
+        amb_normalizado = ambiente.strip().lower()
+        if amb_normalizado not in AMBIENTES_RECONHECIDOS:
+            raise ValueError(
+                f"Configuração insegura: ambiente '{ambiente}' não é reconhecido. "
+                "Valores permitidos: producao, desenvolvimento, teste, homologacao. "
+                "Fallback silencioso bloqueado por política de segurança."
+            )
+        return amb_normalizado
+
+    @property
+    def e_producao(self) -> bool:
+        """Indica se a instância está operando em ambiente de produção estrito."""
+        return self.ambiente.strip().lower() in AMBIENTES_PRODUCAO
+
+    def validar_seguranca_producao(self) -> None:
+        """Executa validação fail-closed impedindo inicialização insegura em produção."""
+        if not self.e_producao:
+            return
+
+        # Produção exige obrigatoriamente chaves configuradas
+        if not self.chave_api_mestre and not self.mapeamento_chaves_usuarios:
+            raise ValueError(
+                "Configuração insegura: ambiente de produção exige a definição explícita de "
+                "credenciais válidas (chave_api_mestre ou mapeamento_chaves_usuarios)."
+            )
+
+        # Valida chave mestre
+        if self.chave_api_mestre is not None:
+            chave_limpa = self.chave_api_mestre.strip()
+            if len(chave_limpa) < 16:
+                raise ValueError(
+                    "Configuração insegura: a chave_api_mestre para produção deve possuir "
+                    "no mínimo 16 caracteres de entropia."
+                )
+            if chave_limpa.lower() in CHAVES_DEMONSTRACAO_INSEGURAS:
+                raise ValueError(
+                    "Configuração insegura: a chave_api_mestre utiliza um valor de demonstração "
+                    "conhecido ou padrão, não permitido em produção."
+                )
+
+        # Valida chaves de serviços confiáveis (M2M)
+        for chave_servico in self.chaves_servicos_confiaveis:
+            cs = chave_servico.strip()
+            if len(cs) < 16:
+                raise ValueError(
+                    "Configuração insegura: a chave de serviço M2M para produção deve possuir "
+                    "no mínimo 16 caracteres de entropia."
+                )
+            if cs.lower() in CHAVES_DEMONSTRACAO_INSEGURAS:
+                raise ValueError(
+                    "Configuração insegura: uma das chaves de serviços confiáveis utiliza um valor "
+                    "fraco ou de demonstração não permitido em produção."
+                )
+
+        # Valida chaves de usuários mapeadas
+        for chave_usuario in self.mapeamento_chaves_usuarios:
+            cu = chave_usuario.strip()
+            if len(cu) < 16 or cu.lower() in CHAVES_DEMONSTRACAO_INSEGURAS:
+                raise ValueError(
+                    "Configuração insegura: uma das chaves mapeadas para usuários utiliza um valor "
+                    "fraco ou de demonstração não permitido em produção."
+                )
+
     @classmethod
     def carregar_do_ambiente(cls) -> "ConfiguracoesGateway":
-        """Instancia configurações a partir de variáveis de ambiente."""
+        """Instancia configurações a partir de variáveis de ambiente com validação estrita."""
+        ambiente_bruto = (
+            os.getenv("GATEWAY_AMBIENTE")
+            or os.getenv("ENVIRONMENT")
+            or os.getenv("APP_ENV")
+            or "desenvolvimento"
+        )
+        ambiente = cls.validar_ambiente(ambiente_bruto)
         chave_mestre = os.getenv("GATEWAY_API_KEY")
         chaves_confiaveis_brutas = os.getenv("GATEWAY_CHAVES_CONFIAVEIS", "")
         chaves_confiaveis = tuple(
@@ -34,6 +151,7 @@ class ConfiguracoesGateway:
         )
 
         return cls(
+            ambiente=ambiente,
             chave_api_mestre=chave_mestre,
             chaves_servicos_confiaveis=chaves_confiaveis,
             permitir_delegacao_m2m=os.getenv(

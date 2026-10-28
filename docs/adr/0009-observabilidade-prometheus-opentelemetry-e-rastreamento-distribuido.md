@@ -19,14 +19,14 @@ Com a transição para arquitetura conteinerizada em microsserviço (AI Gateway)
 1. **Prometheus para Métricas Operacionais**:
    - Implementar o adaptador `MetricasPrometheus` satisfazendo o contrato hexagonal `PortaObservabilidade`.
    - Expor o endpoint nativo `GET /metrics` no formato oficial texto (versão 0.0.4) do Prometheus.
-   - Adotar estrita política de **baixa cardinalidade**, normalizando rotas HTTP em templates fixos e vedando identificadores de conversa ou de usuário em labels de métricas.
+   - Adotar estrita política de **baixa cardinalidade**, normalizando rotas HTTP em templates fixos e vedando identificadores de conversa ou de usuário em labels de métricas. Rotas não mapeadas ou 404 recebem a categoria fixa `/_desconhecida` para neutralizar ataques de negação de serviço por saturação de memória.
    - Fornecer mecanismo de proteção do endpoint `/metrics` mediante Bearer token (`METRICAS_TOKEN`) e flag de desativação (`METRICAS_HABILITADAS`).
 
 2. **OpenTelemetry para Tracing Distribuído**:
-   - Implementar o `GerenciadorRastreamento` baseado no OpenTelemetry Python SDK com suporte ao padrão W3C `traceparent` (RFC 8307 / W3C Trace Context).
+   - Implementar o `GerenciadorRastreamento` baseado no OpenTelemetry Python SDK com suporte estrito ao padrão W3C `traceparent` (W3C Trace Context RFC 9151), utilizando injeção e extração oficial e preservando as flags de rastreamento reais.
    - Injetar os cabeçalhos `traceparent`, `X-Request-ID` e `X-Process-Time` nas respostas HTTP.
-   - Proteger estritamente a privacidade: filtros automáticos eliminam prompts, respostas, mensagens e credenciais dos atributos de spans.
-   - Resiliência operacional: operar por padrão com `ExportadorSpansMemoria` sem falhas de rede na ausência de coletores externos, suportando exportação HTTP OTLP quando configurada.
+   - Proteger estritamente a privacidade: filtros automáticos eliminam prompts, respostas, mensagens e credenciais dos atributos de spans. A URL registrada (`http.url`) é sanitizada para excluir parâmetros de consulta (`query parameters`). Exceções capturadas são sanitizadas e truncadas antes de compor o status do span.
+   - Resiliência operacional: operar por padrão com `ExportadorSpansMemoria` delimitado (`deque` thread-safe com capacidade de 1.000 spans) sem falhas de rede na ausência de coletores externos, suportando exportação HTTP OTLP quando configurada.
 
 3. **Logs Estruturados JSON com Correlação**:
    - O `FormatadorLogJson` emite registros estruturados em JSON com campos em português brasileiro culto (`timestamp`, `servico`, `nivel`, `logger`, `mensagem`, `arquivo`, `linha`, `trace_id`, `span_id`, `request_id`).

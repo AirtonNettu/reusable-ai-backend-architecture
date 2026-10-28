@@ -1,7 +1,9 @@
 """Gerenciador de rastreamento distribuído com OpenTelemetry e exportação OTLP resiliente."""
 
+import collections
 import logging
 import os
+import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
@@ -20,17 +22,32 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
+from ai_core.adaptadores.observabilidade.formatador_logs import (
+    sanitizar_mensagem_erro,
+)
+
 logger = logging.getLogger("ai_core.observabilidade.otel")
 
 
 class ExportadorSpansMemoria(SpanExporter):
-    """Exportador em memória seguro para inspeção, testes e execução sem collector externo."""
+    """Exportador em memória thread-safe com retenção limitada para testes e fallback local."""
 
-    def __init__(self) -> None:
-        self._spans: list[ReadableSpan] = []
+    def __init__(self, capacidade_maxima: int = 1000) -> None:
+        self._capacidade_maxima = capacidade_maxima
+        self._spans: collections.deque[ReadableSpan] = collections.deque(
+            maxlen=capacidade_maxima
+        )
+        self._trava = threading.Lock()
+
+    @property
+    def capacidade_maxima(self) -> int:
+        """Capacidade máxima de retenção de spans em memória."""
+        return self._capacidade_maxima
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        self._spans.extend(spans)
+        with self._trava:
+            for s in spans:
+                self._spans.append(s)
         return SpanExportResult.SUCCESS
 
     def shutdown(self) -> None:
@@ -40,10 +57,16 @@ class ExportadorSpansMemoria(SpanExporter):
         return True
 
     def obter_spans_finalizados(self) -> tuple[ReadableSpan, ...]:
-        return tuple(self._spans)
+        with self._trava:
+            return tuple(self._spans)
+
+    def quantidade_spans(self) -> int:
+        with self._trava:
+            return len(self._spans)
 
     def limpar(self) -> None:
-        self._spans.clear()
+        with self._trava:
+            self._spans.clear()
 
 
 class GerenciadorRastreamento:
@@ -55,6 +78,7 @@ class GerenciadorRastreamento:
         habilitado: bool = True,
         endpoint_otlp: str | None = None,
         exportador_customizado: SpanExporter | None = None,
+        capacidade_memoria: int = 1000,
     ) -> None:
         self._habilitado = habilitado
         self._nome_servico = nome_servico
@@ -90,13 +114,17 @@ class GerenciadorRastreamento:
                     "Falha ao inicializar OTLPSpanExporter (%s). Utilizando ExportadorSpansMemoria como fallback.",
                     erro,
                 )
-                self._exportador_memoria = ExportadorSpansMemoria()
+                self._exportador_memoria = ExportadorSpansMemoria(
+                    capacidade_maxima=capacidade_memoria
+                )
                 self._provider.add_span_processor(
                     SimpleSpanProcessor(self._exportador_memoria)
                 )
         else:
             # Padrão: mantemos em memória sem risco de exceções de rede externas
-            self._exportador_memoria = ExportadorSpansMemoria()
+            self._exportador_memoria = ExportadorSpansMemoria(
+                capacidade_maxima=capacidade_memoria
+            )
             self._provider.add_span_processor(
                 SimpleSpanProcessor(self._exportador_memoria)
             )
@@ -119,10 +147,24 @@ class GerenciadorRastreamento:
         return None, None
 
     def obter_traceparent_w3c(self) -> str | None:
-        """Retorna o cabeçalho no padrão W3C traceparent (ex: 00-traceid-spanid-01)."""
-        trace_id, span_id = self.obter_trace_e_span_id_atuais()
-        if trace_id and span_id:
-            return f"00-{trace_id}-{span_id}-01"
+        """Retorna o cabeçalho no padrão W3C traceparent respeitando as flags reais do span ativo."""
+        # 1. Utiliza injeção oficial do propagador W3C do OpenTelemetry
+        carrier: dict[str, str] = {}
+        try:
+            self._propagador_w3c.inject(carrier)
+            if "traceparent" in carrier:
+                return carrier["traceparent"]
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        # 2. Fallback de formatação com as flags reais do contexto
+        span_atual = trace.get_current_span()
+        contexto = span_atual.get_span_context()
+        if contexto and contexto.is_valid:
+            trace_id_hex = f"{contexto.trace_id:032x}"
+            span_id_hex = f"{contexto.span_id:016x}"
+            flags_hex = f"{contexto.trace_flags:02x}"
+            return f"00-{trace_id_hex}-{span_id_hex}-{flags_hex}"
         return None
 
     def _extrair_contexto_remoto(self, contexto_externo: dict[str, str] | None) -> Any:
@@ -148,15 +190,23 @@ class GerenciadorRastreamento:
 
         ctx_remoto = self._extrair_contexto_remoto(contexto_externo)
         atributos_sanitizados = self._sanitizar_atributos(atributos or {})
-        with self._tracer.start_as_current_span(
+        span = self._tracer.start_span(
             nome_operacao, context=ctx_remoto, attributes=atributos_sanitizados
-        ) as span:
-            try:
+        )
+        token = trace.use_span(span, end_on_exit=False)
+        try:
+            with token:
                 yield span
-            except Exception as erro:
-                span.set_status(Status(StatusCode.ERROR, str(erro)))
-                span.set_attribute("error.type", type(erro).__name__)
-                raise
+        except Exception as erro:
+            msg_sanitizada = sanitizar_mensagem_erro(str(erro))
+            span.set_status(
+                Status(StatusCode.ERROR, f"{type(erro).__name__}: {msg_sanitizada}")
+            )
+            span.set_attribute("error.type", type(erro).__name__)
+            span.set_attribute("error.message", msg_sanitizada)
+            raise
+        finally:
+            span.end()
 
     @asynccontextmanager
     async def iniciar_span_assincrono(
@@ -172,15 +222,23 @@ class GerenciadorRastreamento:
 
         ctx_remoto = self._extrair_contexto_remoto(contexto_externo)
         atributos_sanitizados = self._sanitizar_atributos(atributos or {})
-        with self._tracer.start_as_current_span(
+        span = self._tracer.start_span(
             nome_operacao, context=ctx_remoto, attributes=atributos_sanitizados
-        ) as span:
-            try:
+        )
+        token = trace.use_span(span, end_on_exit=False)
+        try:
+            with token:
                 yield span
-            except Exception as erro:
-                span.set_status(Status(StatusCode.ERROR, str(erro)))
-                span.set_attribute("error.type", type(erro).__name__)
-                raise
+        except Exception as erro:
+            msg_sanitizada = sanitizar_mensagem_erro(str(erro))
+            span.set_status(
+                Status(StatusCode.ERROR, f"{type(erro).__name__}: {msg_sanitizada}")
+            )
+            span.set_attribute("error.type", type(erro).__name__)
+            span.set_attribute("error.message", msg_sanitizada)
+            raise
+        finally:
+            span.end()
 
     def _sanitizar_atributos(self, atributos: dict[str, Any]) -> dict[str, Any]:
         """Filtra atributos garantindo que prompts, respostas ou tokens sensíveis não sejam indexados."""

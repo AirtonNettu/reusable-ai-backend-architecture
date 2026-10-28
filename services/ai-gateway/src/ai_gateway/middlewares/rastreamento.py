@@ -5,6 +5,9 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 
+from ai_core.adaptadores.observabilidade.formatador_logs import (
+    sanitizar_mensagem_erro,
+)
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -15,6 +18,8 @@ from ai_gateway.dependencias import (
 
 logger = logging.getLogger("ai_gateway.acesso")
 
+ROTA_NAO_RECONHECIDA = "/_desconhecida"
+
 
 class MiddlewareRastreamento(BaseHTTPMiddleware):
     """Injeta identificador de correlação, span OpenTelemetry e registra métricas de tráfego."""
@@ -24,7 +29,15 @@ class MiddlewareRastreamento(BaseHTTPMiddleware):
         route = request.scope.get("route")
         if route and hasattr(route, "path") and route.path:
             return str(route.path)
-        return request.url.path or "/"
+        app = request.scope.get("app")
+        if app and hasattr(app, "routes"):
+            from starlette.routing import Match
+
+            for r in app.routes:
+                match, _ = r.matches(request.scope)
+                if match == Match.FULL and hasattr(r, "path") and r.path:
+                    return str(r.path)
+        return ROTA_NAO_RECONHECIDA
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -37,11 +50,16 @@ class MiddlewareRastreamento(BaseHTTPMiddleware):
         rastreador = obter_gerenciador_rastreamento()
         metricas = obter_metricas_prometheus()
 
+        # Monta URL estritamente sem query parameters para prevenir vazamento de dados sensíveis em traces
+        url_sanitizada = f"{request.url.scheme}://{request.url.netloc}{caminho}"
         atributos_iniciais = {
             "http.method": metodo,
-            "http.url": str(request.url),
+            "http.url": url_sanitizada,
             "http.target": caminho,
+            "http.route": self._obter_rota_normalizada(request),
             "http.request_id": id_requisicao,
+            "url.scheme": request.url.scheme,
+            "url.path": caminho,
         }
 
         cabecalhos_w3c = {
@@ -75,7 +93,8 @@ class MiddlewareRastreamento(BaseHTTPMiddleware):
                         "rota": rota_normalizada,
                         "status": 500,
                         "duracao_segundos": duracao,
-                        "erro": str(erro),
+                        "erro_tipo": type(erro).__name__,
+                        "erro": sanitizar_mensagem_erro(str(erro)),
                     },
                 )
                 raise
@@ -89,6 +108,7 @@ class MiddlewareRastreamento(BaseHTTPMiddleware):
             )
 
             if span.is_recording():
+                span.set_attribute("http.route", rota_normalizada)
                 span.set_attribute("http.status_code", status_code)
                 span.set_attribute("http.duration_seconds", duracao)
 

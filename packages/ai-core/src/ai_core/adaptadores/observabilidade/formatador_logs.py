@@ -24,10 +24,34 @@ TERMOS_SENSIVEIS = {
 }
 
 PADROES_REGEX_SENSIVEIS = [
-    re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]+", re.IGNORECASE),
-    re.compile(r"sk-[A-Za-z0-9]{8,}", re.IGNORECASE),
-    re.compile(r"AIza[A-Za-z0-9_\-]{10,}", re.IGNORECASE),
+    (re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]+", re.IGNORECASE), "[CREDENTIAL_REDACTED]"),
+    (re.compile(r"sk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE), "[CREDENTIAL_REDACTED]"),
+    (re.compile(r"AIza[A-Za-z0-9_\-]{10,}", re.IGNORECASE), "[CREDENTIAL_REDACTED]"),
+    (
+        re.compile(
+            r"(api_key|token|password|senha|secret|segredo)=([^&\s]+)",
+            re.IGNORECASE,
+        ),
+        r"\1=[CREDENTIAL_REDACTED]",
+    ),
 ]
+
+
+def sanitizar_mensagem_erro(
+    mensagem: str | None,
+    limite_caracteres: int = 500,
+    tamanho_maximo: int | None = None,
+) -> str:
+    """Sanitiza mensagens de erro ou logs removendo padrões de credenciais e tokens sensíveis."""
+    if not mensagem:
+        return ""
+    limite = tamanho_maximo if tamanho_maximo is not None else limite_caracteres
+    texto = str(mensagem)
+    for padrao, substituicao in PADROES_REGEX_SENSIVEIS:
+        texto = padrao.sub(substituicao, texto)
+    if len(texto) > limite:
+        texto = texto[:limite] + " [TRUNCADO]"
+    return texto
 
 
 class FormatadorLogJson(logging.Formatter):
@@ -39,9 +63,7 @@ class FormatadorLogJson(logging.Formatter):
 
     def _sanitizar_texto(self, texto: str) -> str:
         """Substitui padrões detectados de tokens conhecidos por marcadores seguros."""
-        for padrao in PADROES_REGEX_SENSIVEIS:
-            texto = padrao.sub("[CREDENTIAL_REDACTED]", texto)
-        return texto
+        return sanitizar_mensagem_erro(texto)
 
     def _sanitizar_valor(self, chave: str, valor: Any) -> Any:
         """Mascara o valor caso a chave indique um dado sensível."""
@@ -98,7 +120,7 @@ class FormatadorLogJson(logging.Formatter):
                 self.formatException(record.exc_info)
             )
 
-        # Campos extras arbitrários com sanitização
+        # Campos extras úteis para observabilidade
         for chave, valor in record.__dict__.items():
             if chave not in (
                 "args",

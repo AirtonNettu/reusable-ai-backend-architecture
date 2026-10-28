@@ -6,7 +6,10 @@ import logging
 
 import pytest
 from ai_core.adaptadores.memoria.memoria_sqlite import MemoriaSQLite
-from ai_core.adaptadores.observabilidade.formatador_logs import FormatadorLogJson
+from ai_core.adaptadores.observabilidade.formatador_logs import (
+    FormatadorLogJson,
+    sanitizar_mensagem_erro,
+)
 from ai_core.adaptadores.observabilidade.metricas_prometheus import (
     MetricasPrometheus,
 )
@@ -19,6 +22,11 @@ from ai_core.resiliencia.disjuntor import Disjuntor
 from ai_core.resiliencia.fallback import PoliticaFallback
 from ai_gateway.configuracoes import ConfiguracoesGateway
 from ai_gateway.main import criar_aplicacao
+from ai_gateway.middlewares.rastreamento import (
+    ROTA_NAO_RECONHECIDA,
+    MiddlewareRastreamento,
+)
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prometheus_client import CollectorRegistry
 
@@ -403,3 +411,251 @@ def test_endpoint_metricas_producao_protecao_automatica_e_validacao() -> None:
     )
     assert resp_autorizada.status_code == 200
     assert "http_requisicoes_total" in resp_autorizada.text
+
+
+def test_span_http_sanitiza_query_string_sensivel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifica se spans HTTP gerados pelo middleware não registram query string sensível nem tokens."""
+    exportador = ExportadorSpansMemoria()
+    gerenciador = GerenciadorRastreamento(
+        nome_servico="teste-sanitizacao-url",
+        habilitado=True,
+        exportador_customizado=exportador,
+    )
+    monkeypatch.setattr(
+        "ai_gateway.middlewares.rastreamento.obter_gerenciador_rastreamento",
+        lambda: gerenciador,
+    )
+
+    app_teste = FastAPI()
+    app_teste.add_middleware(MiddlewareRastreamento)
+
+    @app_teste.get("/teste-seguro")
+    def rota_teste() -> dict[str, bool]:
+        return {"ok": True}
+
+    client = TestClient(app_teste)
+    resposta = client.get(
+        "/teste-seguro?token=sk-1234567890abcdef&email=segredo@empresa.com&api_key=AIzaSyA1234"
+    )
+    assert resposta.status_code == 200
+
+    spans = exportador.obter_spans_finalizados()
+    assert len(spans) == 1
+    span = spans[0]
+    atributos = span.attributes or {}
+
+    # Checar que http.url NÃO possui query string nem os segredos
+    url_registrada = str(atributos.get("http.url", ""))
+    assert "sk-1234567890abcdef" not in url_registrada
+    assert "email=segredo@empresa.com" not in url_registrada
+    assert "?" not in url_registrada
+    assert url_registrada.endswith("/teste-seguro")
+
+    # Checar atributos semânticos
+    assert atributos.get("url.path") == "/teste-seguro"
+    assert atributos.get("http.route") == "/teste-seguro"
+    assert atributos.get("http.target") == "/teste-seguro"
+
+
+def test_span_e_logs_sanitizam_excecoes_com_segredos() -> None:
+    """Verifica se exceções contendo credenciais são devidamente mascaradas nos spans."""
+    exportador = ExportadorSpansMemoria()
+    gerenciador = GerenciadorRastreamento(
+        nome_servico="teste-sanitizacao-excecao",
+        habilitado=True,
+        exportador_customizado=exportador,
+    )
+
+    segredo_simulado = "sk-1234567890abcdefg"
+    mensagem_excecao = f"Falha na comunicação com provedor externo usando chave {segredo_simulado} e Bearer eyJhbGciOi"
+
+    with pytest.raises(RuntimeError), gerenciador.iniciar_span("operacao_sensivel"):
+        raise RuntimeError(mensagem_excecao)
+
+    spans = exportador.obter_spans_finalizados()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code.name == "ERROR"
+
+    descricao_status = span.status.description
+    assert descricao_status is not None
+    assert segredo_simulado not in descricao_status
+    assert "[CREDENTIAL_REDACTED]" in descricao_status
+    assert "RuntimeError" in descricao_status
+
+    atributos = span.attributes or {}
+    assert atributos.get("error.type") == "RuntimeError"
+    assert segredo_simulado not in str(atributos.get("error.message", ""))
+    assert "[CREDENTIAL_REDACTED]" in str(atributos.get("error.message", ""))
+
+
+def test_middleware_captura_excecao_e_sanitiza_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Confirma que o middleware sanitiza exceções nos logs e no span sem vazar chaves sensíveis."""
+    exportador = ExportadorSpansMemoria()
+    gerenciador = GerenciadorRastreamento(
+        nome_servico="teste-mw-excecao",
+        habilitado=True,
+        exportador_customizado=exportador,
+    )
+    monkeypatch.setattr(
+        "ai_gateway.middlewares.rastreamento.obter_gerenciador_rastreamento",
+        lambda: gerenciador,
+    )
+
+    app = FastAPI()
+    app.add_middleware(MiddlewareRastreamento)
+
+    @app.get("/erro-sensivel")
+    async def rota_com_falha() -> None:
+        raise ValueError(
+            "Falha crítica com chave sk-abcdef1234567890 e token=segredo123"
+        )
+
+    client = TestClient(app, raise_server_exceptions=False)
+    with caplog.at_level(logging.ERROR):
+        resposta = client.get("/erro-sensivel")
+
+    assert resposta.status_code == 500
+    spans = exportador.obter_spans_finalizados()
+    assert len(spans) == 1
+    span = spans[0]
+    assert "sk-abcdef1234567890" not in str(span.status.description)
+    assert "[CREDENTIAL_REDACTED]" in str(span.status.description)
+
+    # Checar que o log estruturado emitido pelo middleware não vazou a chave crua
+    registros_erro = [r for r in caplog.records if r.name == "ai_gateway.acesso"]
+    assert len(registros_erro) >= 1
+    ultimo_registro = registros_erro[-1]
+    assert "sk-abcdef1234567890" not in str(getattr(ultimo_registro, "erro", ""))
+    assert "[CREDENTIAL_REDACTED]" in str(getattr(ultimo_registro, "erro", ""))
+
+
+def test_rotas_desconhecidas_usam_categoria_fixa_baixa_cardinalidade() -> None:
+    """Confirma que rotas 404 dinâmicas utilizam ROTA_NAO_RECONHECIDA para prevenir alta cardinalidade."""
+    config = ConfiguracoesGateway(
+        ambiente="desenvolvimento",
+        chave_api_mestre="chave-teste",
+        metricas_habilitadas=True,
+    )
+    app = criar_aplicacao(configuracoes=config)
+    client = TestClient(app)
+
+    # Requisições para caminhos não mapeados com identificadores dinâmicos
+    client.get("/caminho-dinamico-12345/detalhe")
+    client.get("/outro-caminho-aleatorio-98765")
+
+    resp_metrics = client.get("/metrics")
+    assert resp_metrics.status_code == 200
+    texto = resp_metrics.text
+
+    assert f'rota="{ROTA_NAO_RECONHECIDA}"' in texto
+    assert "caminho-dinamico-12345" not in texto
+    assert "outro-caminho-aleatorio-98765" not in texto
+
+
+def test_exportador_spans_memoria_limite_e_concorrencia() -> None:
+    """Verifica retenção delimitada (deque com capacidade máxima) e concorrência thread-safe."""
+    from unittest.mock import MagicMock
+
+    from opentelemetry.sdk.trace import ReadableSpan
+
+    capacidade = 10
+    exportador = ExportadorSpansMemoria(capacidade_maxima=capacidade)
+
+    def exportar_lote(thread_id: int) -> None:
+        for i in range(25):
+            span_mock = MagicMock(spec=ReadableSpan)
+            span_mock.name = f"span-{thread_id}-{i}"
+            exportador.export([span_mock])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        tarefas = [executor.submit(exportar_lote, t) for t in range(6)]
+        concurrent.futures.wait(tarefas)
+
+    # O buffer nunca deve ultrapassar a capacidade limite
+    assert exportador.quantidade_spans() == capacidade
+    spans_retidos = exportador.obter_spans_finalizados()
+    assert len(spans_retidos) == capacidade
+
+    # Testar limpeza
+    exportador.limpar()
+    assert exportador.quantidade_spans() == 0
+    assert len(exportador.obter_spans_finalizados()) == 0
+
+
+def test_propagacao_w3c_preserva_flags_do_span() -> None:
+    """Verifica se obter_traceparent_w3c injeta e preserva as flags corretas do contexto W3C."""
+    gerenciador = GerenciadorRastreamento(
+        nome_servico="teste-w3c-flags",
+        habilitado=True,
+    )
+
+    with gerenciador.iniciar_span("span_ativo"):
+        tp = gerenciador.obter_traceparent_w3c()
+        assert tp is not None
+        partes = tp.split("-")
+        assert len(partes) == 4
+        assert partes[0] == "00"
+        assert len(partes[1]) == 32
+        assert len(partes[2]) == 16
+        # Como o span padrão está sendo gravado (sampled), a flag deve conter o bit de amostragem
+        assert int(partes[3], 16) & 0x01 == 1
+
+
+def test_propagacao_w3c_traceparent_remoto_com_flags_00() -> None:
+    """Verifica herança de traceparent remoto com flag 00 (não amostrado)."""
+    config = ConfiguracoesGateway(
+        ambiente="desenvolvimento",
+        chave_api_mestre="chave-teste",
+        otel_habilitado=True,
+    )
+    app = criar_aplicacao(configuracoes=config)
+    client = TestClient(app)
+
+    trace_id_remoto = "4bf92f3577b34da6a3ce929d0e0e4736"
+    span_id_remoto = "00f067aa0ba902b7"
+    traceparent_origem = f"00-{trace_id_remoto}-{span_id_remoto}-00"
+
+    response = client.get("/health", headers={"traceparent": traceparent_origem})
+    assert response.status_code == 200
+    assert "traceparent" in response.headers
+
+    traceparent_resposta = response.headers["traceparent"]
+    partes = traceparent_resposta.split("-")
+    assert len(partes) == 4
+    assert partes[0] == "00"
+    assert partes[1] == trace_id_remoto
+    assert partes[2] != span_id_remoto
+
+
+def test_sanitizar_mensagem_erro_regras_e_truncamento() -> None:
+    """Testa unitariamente a função de sanitização com credenciais e limites."""
+    # 1. Chaves OpenAI / Anthropic / Google
+    msg_1 = (
+        "Erro ao autenticar com sk-ant-api03-abcdef1234567890 e AIzaSyD3xYz987654321"
+    )
+    sanitizado_1 = sanitizar_mensagem_erro(msg_1)
+    assert "sk-ant-api03-abcdef1234567890" not in sanitizado_1
+    assert "AIzaSyD3xYz987654321" not in sanitizado_1
+    assert "[CREDENTIAL_REDACTED]" in sanitizado_1
+
+    # 2. Bearer tokens e URLs com query string
+    msg_2 = "Falha em http://provedor.interno/v1?token=supersecret123&api_key=privado456 com Bearer tok_xyz"
+    sanitizado_2 = sanitizar_mensagem_erro(msg_2)
+    assert "supersecret123" not in sanitizado_2
+    assert "privado456" not in sanitizado_2
+    assert "tok_xyz" not in sanitizado_2
+
+    # 3. Truncamento
+    msg_longa = "A" * 1000
+    sanitizado_3 = sanitizar_mensagem_erro(msg_longa, tamanho_maximo=200)
+    assert len(sanitizado_3) <= 220
+    assert "[TRUNCADO]" in sanitizado_3
+
+    # 4. Mensagem sem segredos permanece intacta
+    msg_limpa = "Erro de conexão timeout após 5.0 segundos"
+    assert sanitizar_mensagem_erro(msg_limpa) == msg_limpa

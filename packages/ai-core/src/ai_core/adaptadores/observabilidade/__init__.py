@@ -1,6 +1,9 @@
 """Exportações do módulo de observabilidade."""
 
-from ai_core.adaptadores.observabilidade.formatador_logs import FormatadorLogJson
+from ai_core.adaptadores.observabilidade.formatador_logs import (
+    FormatadorLogJson,
+    sanitizar_mensagem_erro,
+)
 from ai_core.adaptadores.observabilidade.metricas_prometheus import (
     MetricasPrometheus,
 )
@@ -24,4 +27,5 @@ __all__ = [
     "RegistroEvento",
     "RegistroMetrica",
     "rastreador_global",
+    "sanitizar_mensagem_erro",
 ]

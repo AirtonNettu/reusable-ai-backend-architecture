@@ -48,9 +48,9 @@ Este documento define a pirâmide de testes, as convenções e a cobertura autom
 | `tests/test_seguranca_concorrencia_e_sanitizacao.py` | Concorrência massiva SQLite WAL, sanitização de logs, defesas DoS de borda e validação rigorosa de esquemas. | 6 |
 | `tests/test_auditoria_identidade_e_seguranca.py` | Prevenção de falsificação de identidade (Anti-Spoofing de X-User-ID), delegação M2M, validação fail-closed em produção, rejeição de ambientes desconhecidos e autenticação negativa. | 12 |
 | `tests/test_gateway_api.py` | Rotas FastAPI: `/health`, `/v1/modelos`, `/v1/chat/conclusoes` (síncrono e SSE streaming), `/v1/chat/estruturado`, `/v1/agentes/executar`, autenticação e RFC 7807. | 8 |
-| `tests/test_observabilidade_e_metricas.py` | Métricas Prometheus (/metrics, contadores, histogramas, gauges), autorização Bearer token, tracing OpenTelemetry (propagação W3C traceparent remoto, spans síncronos/assíncronos, sanitização de atributos), logs correlacionados com trace/span_id, concorrência de métricas e telemetria em Disjuntor, PoliticaFallback e MemoriaSQLite. | 15 |
+| `tests/test_observabilidade_e_metricas.py` | Métricas Prometheus (/metrics, contadores, histogramas, gauges), autorização Bearer token, tracing OpenTelemetry (propagação W3C traceparent remoto com preservação de flags e modo não-amostrado, spans síncronos/assíncronos, sanitização de query strings em http.url, sanitização de exceções em spans sem sobrescrita, mitigação de cardinalidade com ROTA_NAO_RECONHECIDA, buffer em memória delimitado com deque e trava de concorrência), logs correlacionados com trace/span_id, regras e truncamento de sanitização, concorrência de métricas e telemetria em Disjuntor, PoliticaFallback e MemoriaSQLite. | 23 |
 | `tests/test_integracao_fluxo_completo.py` | Fluxo completo Gateway -> Caso de Uso -> Roteador -> SQLite; Isolamento Multilocatário (403 Forbidden); Resiliência e Fallback sob concorrência; Chat estruturado complexo. | 4 |
-| **Total** | **Suíte Automatizada Completa** | **109 cenários** |
+| **Total** | **Suíte Automatizada Completa** | **117 cenários** |
 
 ---
 

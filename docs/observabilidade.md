@@ -47,11 +47,12 @@ As métricas são expostas no endpoint padrão `GET /metrics` no formato oficial
 | `persistencia_operacoes_total` | Contador | `tipo_memoria`, `operacao`, `sucesso` | Operações realizadas nos bancos SQLite e PostgreSQL |
 | `persistencia_duracao_segundos` | Histograma | `tipo_memoria`, `operacao` | Tempo de resposta de leitura e escrita de histórico conversacional |
 
-### 2.2 Política de Baixa Cardinalidade
+### 2.2 Política de Baixa Cardinalidade e Proteção DoS
 
 Para evitar exaustão de memória em sistemas de time-series (Prometheus/Thanos/Cortex):
 - **Proibido** utilizar identificadores de usuário (`id_usuario`), IDs de conversa (`id_conversa`) ou valores de parâmetros em labels.
 - O campo `rota` utiliza templates padronizados (ex: `/v1/chat/conclusoes`), normalizados automaticamente pelo `MiddlewareRastreamento`.
+- **Rotas Não Mapeadas (404/Probing)**: Qualquer requisição para rotas não registradas no roteador FastAPI é categorizada sob o rótulo fixo `ROTA_NAO_RECONHECIDA = "/_desconhecida"`, impedindo ataques de negação de serviço por explosão de cardinalidade decorrentes de URLs dinâmicas arbitrárias.
 
 ---
 
@@ -61,16 +62,20 @@ A plataforma integra nativamente o **OpenTelemetry Python SDK** com os seguintes
 
 ### 3.1 Propagação de Contexto e Cabeçalhos
 - Todo ciclo HTTP gera ou propaga um `trace_id` de 32 caracteres hexadecimais e um `span_id` de 16 caracteres hexadecimais.
-- A resposta HTTP devolve o cabeçalho padrão **W3C `traceparent`** (ex: `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`).
+- A resposta HTTP devolve o cabeçalho padrão **W3C `traceparent`** (ex: `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`), preservando fielmente as `trace_flags` reais negociadas (ex: `01` gravado/amostrado, `00` não amostrado).
+- O propagador oficial `TraceContextTextMapPropagator` do OpenTelemetry é utilizado para injeção e extração bidirecional com serviços externos.
 - Também são mantidos os cabeçalhos operacionais `X-Request-ID` e `X-Process-Time`.
 
 ### 3.2 Spans Sanitizados e Proteção de Dados Sensíveis
-O `GerenciadorRastreamento` garante por projeto que:
+O `GerenciadorRastreamento` e o `MiddlewareRastreamento` garantem por projeto que:
 - Prompts de usuários, conteúdos de respostas, mensagens conversacionais, chaves de API e senhas **nunca** são inseridos como atributos de spans.
-- Atributos permitidos incluem apenas metadados técnicos de infraestrutura e contadores (`modelo`, `status_code`, `http.method`, `total_tokens`).
+- **URLs Sanitizadas**: O atributo `http.url` registra estritamente a URL base (`scheme://host:port/path`) sem parâmetros de busca (`query parameters`), garantindo que tokens, chaves temporárias ou dados pessoais não sejam exportados para coletores externos.
+- **Atributos Semânticos Padronizados**: São exportados atributos padronizados e seguros como `http.method`, `http.target`, `http.route`, `url.scheme`, `url.path`, `http.status_code`, `http.request_id` e contadores de tokens.
+- **Sanitização de Exceções**: Quando uma falha é capturada, a mensagem é processada por `sanitizar_mensagem_erro` antes de compor o status do span (`span.set_status`) e os atributos técnicos (`error.type` e `error.message`). Padrões de credenciais (`sk-...`, `Bearer ...`, `AIza...`) são substituídos por `[CREDENTIAL_REDACTED]` e mensagens excessivamente longas são truncadas para evitar exaustão de payload.
 
 ### 3.3 Resiliência e Fallback Local
 - Quando nenhuma URL de coletor OTLP externo for informada (`OTEL_ENDPOINT_OTLP`), o tracing opera com o `ExportadorSpansMemoria` sem bloquear o processamento nem gerar erros de rede.
+- **Buffer Delimitado e Thread-Safe**: O `ExportadorSpansMemoria` adota retenção em fila circular (`collections.deque` com capacidade máxima configurável, padrão de 1.000 spans) e sincronização via `threading.Lock`, eliminando riscos de vazamento progressivo de memória em execuções de longa duração.
 - Caso um endpoint OTLP falhe durante a inicialização, a plataforma chaveia automaticamente para o buffer em memória.
 
 ### 3.4 Limitações da Exportação OTLP e Integrações Futuras

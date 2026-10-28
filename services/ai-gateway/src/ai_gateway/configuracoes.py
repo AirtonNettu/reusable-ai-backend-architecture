@@ -59,6 +59,11 @@ class ConfiguracoesGateway:
     caminho_banco_sqlite: str = ":memory:"
     url_conexao_postgresql: str | None = None
     limite_conexoes_postgresql: int = 10
+    metricas_habilitadas: bool = True
+    metricas_token: str | None = None
+    otel_habilitado: bool = True
+    otel_endpoint_otlp: str | None = None
+    otel_nome_servico: str = "ai-gateway"
 
     def __post_init__(self) -> None:
         """Valida que o ambiente configurado é reconhecido, evitando fallback silencioso."""
@@ -134,6 +139,18 @@ class ConfiguracoesGateway:
                     "fraco ou de demonstração não permitido em produção."
                 )
 
+        # Validação fail-closed para token de métricas em produção se fornecido
+        if self.metricas_habilitadas and self.metricas_token is not None:
+            token_limpo = self.metricas_token.strip()
+            if (
+                len(token_limpo) < 16
+                or token_limpo.lower() in CHAVES_DEMONSTRACAO_INSEGURAS
+            ):
+                raise ValueError(
+                    "Configuração insegura: o 'metricas_token' para produção deve possuir "
+                    "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração."
+                )
+
     @classmethod
     def carregar_do_ambiente(cls) -> "ConfiguracoesGateway":
         """Instancia configurações a partir de variáveis de ambiente com validação estrita."""
@@ -168,4 +185,13 @@ class ConfiguracoesGateway:
             limite_conexoes_postgresql=int(
                 os.getenv("GATEWAY_POSTGRES_POOL_SIZE", "10")
             ),
+            metricas_habilitadas=os.getenv(
+                "GATEWAY_METRICAS_HABILITADAS", "true"
+            ).lower()
+            in ("true", "1", "yes"),
+            metricas_token=os.getenv("GATEWAY_METRICAS_TOKEN"),
+            otel_habilitado=os.getenv("OTEL_HABILITADO", "true").lower()
+            in ("true", "1", "yes"),
+            otel_endpoint_otlp=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            otel_nome_servico=os.getenv("OTEL_SERVICE_NAME", "ai-gateway"),
         )

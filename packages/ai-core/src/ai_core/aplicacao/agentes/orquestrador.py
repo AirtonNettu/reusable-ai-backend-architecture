@@ -2,6 +2,7 @@
 
 import time
 
+from ai_core.adaptadores.observabilidade.rastreador_otel import rastreador_global
 from ai_core.adaptadores.roteamento.roteador import RoteadorModelos
 from ai_core.dominio.modelos.agente import (
     ConfiguracaoAgente,
@@ -58,108 +59,132 @@ class OrquestradorAgente:
 
         ferramentas = self._filtrar_ferramentas(configuracao.ferramentas_permitidas)
 
-        mensagens_ciclo: list[Mensagem] = [
-            Mensagem(papel="sistema", conteudo=configuracao.instrucao_sistema),
-            *historico_previo,
-            Mensagem(papel="usuario", conteudo=objetivo),
-        ]
+        atributos_span = {
+            "agente.nome": configuracao.nome,
+            "agente.modelo": self._modelo_padrao,
+            "agente.limite_passos": configuracao.limite_passos,
+        }
 
-        resposta_final = ""
-        sucesso = True
-        erro_final: str | None = None
+        async with rastreador_global.iniciar_span_assincrono(
+            "agente.executar", atributos=atributos_span
+        ) as span:
+            mensagens_ciclo: list[Mensagem] = [
+                Mensagem(papel="sistema", conteudo=configuracao.instrucao_sistema),
+                *historico_previo,
+                Mensagem(papel="usuario", conteudo=objetivo),
+            ]
 
-        for numero_passo in range(1, configuracao.limite_passos + 1):
-            if time.monotonic() - inicio > configuracao.timeout_segundos:
-                sucesso = False
-                erro_final = f"Tempo limite ({configuracao.timeout_segundos}s) esgotado no agente."
-                break
+            resposta_final = ""
+            sucesso = True
+            erro_final: str | None = None
 
-            requisicao = RequisicaoGeracao(
-                modelo=self._modelo_padrao,
-                mensagens=tuple(mensagens_ciclo),
-                configuracao=ConfiguracaoGeracao(temperatura=0.2),
-                ferramentas=ferramentas,
-            )
+            for numero_passo in range(1, configuracao.limite_passos + 1):
+                if time.monotonic() - inicio > configuracao.timeout_segundos:
+                    sucesso = False
+                    erro_final = f"Tempo limite ({configuracao.timeout_segundos}s) esgotado no agente."
+                    if self._observabilidade:
+                        self._observabilidade.registrar_contagem(
+                            "agente_erro", tags={"modelo": self._modelo_padrao}
+                        )
+                    break
 
-            resposta = await self._roteador.gerar(requisicao)
+                if self._observabilidade:
+                    self._observabilidade.registrar_contagem(
+                        "agente_passo", tags={"modelo": self._modelo_padrao}
+                    )
 
-            tokens_acumulados[0] += resposta.uso.tokens_entrada
-            tokens_acumulados[1] += resposta.uso.tokens_saida
-            tokens_acumulados[2] += resposta.uso.total_tokens
+                requisicao = RequisicaoGeracao(
+                    modelo=self._modelo_padrao,
+                    mensagens=tuple(mensagens_ciclo),
+                    configuracao=ConfiguracaoGeracao(temperatura=0.2),
+                    ferramentas=ferramentas,
+                )
 
-            if not resposta.chamadas_ferramentas:
-                resposta_final = resposta.texto
+                resposta = await self._roteador.gerar(requisicao)
+
+                tokens_acumulados[0] += resposta.uso.tokens_entrada
+                tokens_acumulados[1] += resposta.uso.tokens_saida
+                tokens_acumulados[2] += resposta.uso.total_tokens
+
+                if not resposta.chamadas_ferramentas:
+                    resposta_final = resposta.texto
+                    passos.append(
+                        PassoAgente(
+                            numero_passo=numero_passo,
+                            pensamento=resposta.texto,
+                            resposta_parcial=resposta.texto,
+                        )
+                    )
+                    break
+
+                # Se há chamadas de ferramenta
+                resultados_passo: list[ResultadoFerramenta] = []
+                mensagem_assistente = Mensagem(
+                    papel="assistente",
+                    conteudo=resposta.texto,
+                    chamadas_ferramentas=resposta.chamadas_ferramentas,
+                )
+                mensagens_ciclo.append(mensagem_assistente)
+
+                for chamada in resposta.chamadas_ferramentas:
+                    if self._observabilidade:
+                        self._observabilidade.registrar_evento(
+                            "execucao_ferramenta_agente",
+                            {
+                                "ferramenta": chamada.nome_ferramenta,
+                                "agente": configuracao.nome,
+                            },
+                        )
+
+                    resultado = await self._executor_ferramentas.executar(chamada)
+                    resultados_passo.append(resultado)
+
+                    conteudo_resposta = (
+                        str(resultado.resultado)
+                        if resultado.sucesso
+                        else f"Erro: {resultado.erro}"
+                    )
+                    mensagens_ciclo.append(
+                        Mensagem(
+                            papel="ferramenta",
+                            conteudo=conteudo_resposta,
+                            nome=chamada.nome_ferramenta,
+                            identificador_chamada_ferramenta=chamada.identificador,
+                        )
+                    )
+
                 passos.append(
                     PassoAgente(
                         numero_passo=numero_passo,
                         pensamento=resposta.texto,
-                        resposta_parcial=resposta.texto,
+                        chamadas_ferramentas=resposta.chamadas_ferramentas,
+                        resultados_ferramentas=tuple(resultados_passo),
                     )
                 )
-                break
-
-            # Se há chamadas de ferramenta
-            resultados_passo: list[ResultadoFerramenta] = []
-            mensagem_assistente = Mensagem(
-                papel="assistente",
-                conteudo=resposta.texto,
-                chamadas_ferramentas=resposta.chamadas_ferramentas,
-            )
-            mensagens_ciclo.append(mensagem_assistente)
-
-            for chamada in resposta.chamadas_ferramentas:
+            else:
+                sucesso = False
+                erro_final = f"Limite de {configuracao.limite_passos} passos atingido sem conclusão."
+                resposta_final = passos[-1].pensamento if passos else ""
                 if self._observabilidade:
-                    self._observabilidade.registrar_evento(
-                        "execucao_ferramenta_agente",
-                        {
-                            "ferramenta": chamada.nome_ferramenta,
-                            "agente": configuracao.nome,
-                        },
+                    self._observabilidade.registrar_contagem(
+                        "agente_erro", tags={"modelo": self._modelo_padrao}
                     )
 
-                resultado = await self._executor_ferramentas.executar(chamada)
-                resultados_passo.append(resultado)
+            duracao_total = time.monotonic() - inicio
 
-                conteudo_resposta = (
-                    str(resultado.resultado)
-                    if resultado.sucesso
-                    else f"Erro: {resultado.erro}"
-                )
-                mensagens_ciclo.append(
-                    Mensagem(
-                        papel="ferramenta",
-                        conteudo=conteudo_resposta,
-                        nome=chamada.nome_ferramenta,
-                        identificador_chamada_ferramenta=chamada.identificador,
-                    )
-                )
+            span.set_attribute("agente.sucesso", sucesso)
+            span.set_attribute("agente.passos_executados", len(passos))
+            span.set_attribute("agente.tokens_total", tokens_acumulados[2])
 
-            passos.append(
-                PassoAgente(
-                    numero_passo=numero_passo,
-                    pensamento=resposta.texto,
-                    chamadas_ferramentas=resposta.chamadas_ferramentas,
-                    resultados_ferramentas=tuple(resultados_passo),
-                )
+            return ResultadoExecucaoAgente(
+                resposta_final=resposta_final,
+                passos=tuple(passos),
+                sucesso=sucesso,
+                total_tokens=UsoTokens(
+                    tokens_entrada=tokens_acumulados[0],
+                    tokens_saida=tokens_acumulados[1],
+                    total_tokens=tokens_acumulados[2],
+                ),
+                tempo_total_segundos=duracao_total,
+                erro=erro_final,
             )
-        else:
-            sucesso = False
-            erro_final = (
-                f"Limite de {configuracao.limite_passos} passos atingido sem conclusão."
-            )
-            resposta_final = passos[-1].pensamento if passos else ""
-
-        duracao_total = time.monotonic() - inicio
-
-        return ResultadoExecucaoAgente(
-            resposta_final=resposta_final,
-            passos=tuple(passos),
-            sucesso=sucesso,
-            total_tokens=UsoTokens(
-                tokens_entrada=tokens_acumulados[0],
-                tokens_saida=tokens_acumulados[1],
-                total_tokens=tokens_acumulados[2],
-            ),
-            tempo_total_segundos=duracao_total,
-            erro=erro_final,
-        )

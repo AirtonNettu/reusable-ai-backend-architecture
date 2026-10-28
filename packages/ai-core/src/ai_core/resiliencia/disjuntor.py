@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypeVar
 
 from ai_core.dominio.excecoes import ErroDisjuntorAberto
+from ai_core.dominio.portas.porta_observabilidade import PortaObservabilidade
 
 EstadoDisjuntor = Literal["fechado", "aberto", "meio_aberto"]
 
@@ -27,17 +28,21 @@ class Disjuntor:
         limite_falhas: int = 5,
         tempo_recuperacao_segundos: float = 30.0,
         limite_sucessos_meio_aberto: int = 2,
+        observabilidade: PortaObservabilidade | None = None,
     ) -> None:
         self._nome = nome
         self._limite_falhas = limite_falhas
         self._tempo_recuperacao_segundos = tempo_recuperacao_segundos
         self._limite_sucessos_meio_aberto = limite_sucessos_meio_aberto
+        self._observabilidade = observabilidade
 
         self._estado: EstadoDisjuntor = "fechado"
         self._contador_falhas = 0
         self._contador_sucessos_meio_aberto = 0
         self._momento_ultima_falha = 0.0
         self._bloqueio = asyncio.Lock()
+
+        self._notificar_estado()
 
     @property
     def nome(self) -> str:
@@ -49,6 +54,14 @@ class Disjuntor:
         """Estado atual do circuito."""
         return self._estado
 
+    def _notificar_estado(self) -> None:
+        """Emite evento de observabilidade com o estado atual do disjuntor."""
+        if self._observabilidade is not None:
+            self._observabilidade.registrar_evento(
+                "transicao_disjuntor",
+                {"disjuntor": self._nome, "novo_estado": self._estado},
+            )
+
     async def _atualizar_estado(self) -> None:
         """Atualiza estado interno se o tempo de recuperação tiver expirado."""
         if self._estado == "aberto":
@@ -56,6 +69,7 @@ class Disjuntor:
             if agora - self._momento_ultima_falha >= self._tempo_recuperacao_segundos:
                 self._estado = "meio_aberto"
                 self._contador_sucessos_meio_aberto = 0
+                self._notificar_estado()
 
     async def executar(
         self,
@@ -93,6 +107,7 @@ class Disjuntor:
 
     async def _registrar_sucesso(self) -> None:
         """Trata o sucesso de uma chamada."""
+        estado_anterior = self._estado
         if self._estado == "meio_aberto":
             self._contador_sucessos_meio_aberto += 1
             if self._contador_sucessos_meio_aberto >= self._limite_sucessos_meio_aberto:
@@ -102,8 +117,12 @@ class Disjuntor:
         elif self._estado == "fechado":
             self._contador_falhas = 0
 
+        if self._estado != estado_anterior:
+            self._notificar_estado()
+
     async def _registrar_falha(self) -> None:
         """Trata a falha de uma chamada."""
+        estado_anterior = self._estado
         self._momento_ultima_falha = time.monotonic()
         if self._estado == "meio_aberto":
             self._estado = "aberto"
@@ -112,3 +131,6 @@ class Disjuntor:
             self._contador_falhas += 1
             if self._contador_falhas >= self._limite_falhas:
                 self._estado = "aberto"
+
+        if self._estado != estado_anterior:
+            self._notificar_estado()

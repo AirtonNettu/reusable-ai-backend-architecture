@@ -4,22 +4,28 @@ import asyncio
 import json
 import sqlite3
 import threading
+import time
 from typing import Any
 
 from ai_core.dominio.excecoes import ErroAcessoNaoAutorizadoConversa, ErroValidacao
 from ai_core.dominio.modelos.ferramenta import ChamadaFerramenta
 from ai_core.dominio.modelos.mensagem import Mensagem
 from ai_core.dominio.portas.porta_memoria import PortaRepositorioMemoria
+from ai_core.dominio.portas.porta_observabilidade import PortaObservabilidade
 
 
 class MemoriaSQLite(PortaRepositorioMemoria):
     """Repositório de histórico conversacional persistido em banco SQLite seguro, concorrente e isolado por usuário."""
 
     def __init__(
-        self, caminho_banco: str = ":memory:", timeout_segundos: float = 15.0
+        self,
+        caminho_banco: str = ":memory:",
+        timeout_segundos: float = 15.0,
+        observabilidade: PortaObservabilidade | None = None,
     ) -> None:
         self._caminho_banco = caminho_banco
         self._timeout_segundos = timeout_segundos
+        self._observabilidade = observabilidade
         self._trava = threading.Lock()
         self._conexao = sqlite3.connect(
             self._caminho_banco,
@@ -105,10 +111,31 @@ class MemoriaSQLite(PortaRepositorioMemoria):
                     f"Acesso negado à conversa '{id_conversa}'. Usuário não autenticado para conversa privada."
                 )
 
+    def _registrar_telemetria(
+        self, operacao: str, duracao: float, sucesso: bool
+    ) -> None:
+        if self._observabilidade is not None:
+            self._observabilidade.registrar_latencia(
+                "persistencia_duracao",
+                duracao,
+                {"tipo_memoria": "sqlite", "operacao": operacao},
+            )
+            self._observabilidade.registrar_contagem(
+                "persistencia_operacao",
+                valor=1,
+                tags={
+                    "tipo_memoria": "sqlite",
+                    "operacao": operacao,
+                    "sucesso": "true" if sucesso else "false",
+                },
+            )
+
     def _salvar_sincrono(
         self, id_conversa: str, mensagem: Mensagem, id_usuario: str | None = None
     ) -> None:
         self._validar_id_conversa(id_conversa)
+        inicio = time.monotonic()
+        sucesso = False
 
         metadados_str = json.dumps(mensagem.metadados, ensure_ascii=False)
         chamadas_lista = [
@@ -121,33 +148,39 @@ class MemoriaSQLite(PortaRepositorioMemoria):
         ]
         chamadas_str = json.dumps(chamadas_lista, ensure_ascii=False)
 
-        with self._trava, self._conexao:
-            self._checar_posse_conversa(id_conversa, id_usuario)
+        try:
+            with self._trava, self._conexao:
+                self._checar_posse_conversa(id_conversa, id_usuario)
 
-            if id_usuario is not None:
+                if id_usuario is not None:
+                    self._conexao.execute(
+                        """
+                        INSERT OR IGNORE INTO conversas_proprietarios (id_conversa, id_usuario)
+                        VALUES (?, ?);
+                        """,
+                        (id_conversa, id_usuario),
+                    )
+
                 self._conexao.execute(
                     """
-                    INSERT OR IGNORE INTO conversas_proprietarios (id_conversa, id_usuario)
-                    VALUES (?, ?);
+                    INSERT INTO mensagens_conversa (
+                        id_conversa, id_usuario, papel, conteudo, nome, metadados_json, chamadas_ferramentas_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?);
                     """,
-                    (id_conversa, id_usuario),
+                    (
+                        id_conversa,
+                        id_usuario,
+                        mensagem.papel,
+                        mensagem.conteudo,
+                        mensagem.nome,
+                        metadados_str,
+                        chamadas_str,
+                    ),
                 )
-
-            self._conexao.execute(
-                """
-                INSERT INTO mensagens_conversa (
-                    id_conversa, id_usuario, papel, conteudo, nome, metadados_json, chamadas_ferramentas_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    id_conversa,
-                    id_usuario,
-                    mensagem.papel,
-                    mensagem.conteudo,
-                    mensagem.nome,
-                    metadados_str,
-                    chamadas_str,
-                ),
+            sucesso = True
+        finally:
+            self._registrar_telemetria(
+                "salvar_mensagem", time.monotonic() - inicio, sucesso
             )
 
     def _recuperar_sincrono(
@@ -157,60 +190,77 @@ class MemoriaSQLite(PortaRepositorioMemoria):
         id_usuario: str | None = None,
     ) -> tuple[Mensagem, ...]:
         self._validar_id_conversa(id_conversa)
+        inicio = time.monotonic()
+        sucesso = False
 
-        consulta = """
-            SELECT papel, conteudo, nome, metadados_json, chamadas_ferramentas_json
-            FROM mensagens_conversa
-            WHERE id_conversa = ?
-            ORDER BY id ASC
-        """
-        parametros: list[Any] = [id_conversa]
+        try:
+            consulta = """
+                SELECT papel, conteudo, nome, metadados_json, chamadas_ferramentas_json
+                FROM mensagens_conversa
+                WHERE id_conversa = ?
+                ORDER BY id ASC
+            """
+            parametros: list[Any] = [id_conversa]
 
-        with self._trava:
-            self._checar_posse_conversa(id_conversa, id_usuario)
-            cursor = self._conexao.execute(consulta, parametros)
-            linhas = cursor.fetchall()
+            with self._trava:
+                self._checar_posse_conversa(id_conversa, id_usuario)
+                cursor = self._conexao.execute(consulta, parametros)
+                linhas = cursor.fetchall()
 
-        if limite is not None and limite > 0:
-            linhas = linhas[-limite:]
+            if limite is not None and limite > 0:
+                linhas = linhas[-limite:]
 
-        mensagens: list[Mensagem] = []
-        for l in linhas:
-            metadados = json.loads(l["metadados_json"] or "{}")
-            chamadas_brutas = json.loads(l["chamadas_ferramentas_json"] or "[]")
-            chamadas = tuple(
-                ChamadaFerramenta(
-                    identificador=c["identificador"],
-                    nome_ferramenta=c["nome_ferramenta"],
-                    argumentos=c["argumentos"],
+            mensagens: list[Mensagem] = []
+            for l in linhas:
+                metadados = json.loads(l["metadados_json"] or "{}")
+                chamadas_brutas = json.loads(l["chamadas_ferramentas_json"] or "[]")
+                chamadas = tuple(
+                    ChamadaFerramenta(
+                        identificador=c["identificador"],
+                        nome_ferramenta=c["nome_ferramenta"],
+                        argumentos=c["argumentos"],
+                    )
+                    for c in chamadas_brutas
                 )
-                for c in chamadas_brutas
-            )
 
-            mensagens.append(
-                Mensagem(
-                    papel=l["papel"],
-                    conteudo=l["conteudo"],
-                    nome=l["nome"],
-                    metadados=metadados,
-                    chamadas_ferramentas=chamadas,
+                mensagens.append(
+                    Mensagem(
+                        papel=l["papel"],
+                        conteudo=l["conteudo"],
+                        nome=l["nome"],
+                        metadados=metadados,
+                        chamadas_ferramentas=chamadas,
+                    )
                 )
-            )
 
-        return tuple(mensagens)
+            resultado = tuple(mensagens)
+            sucesso = True
+            return resultado
+        finally:
+            self._registrar_telemetria(
+                "recuperar_historico", time.monotonic() - inicio, sucesso
+            )
 
     def _limpar_sincrono(self, id_conversa: str, id_usuario: str | None = None) -> None:
         self._validar_id_conversa(id_conversa)
+        inicio = time.monotonic()
+        sucesso = False
 
-        with self._trava, self._conexao:
-            self._checar_posse_conversa(id_conversa, id_usuario)
-            self._conexao.execute(
-                "DELETE FROM mensagens_conversa WHERE id_conversa = ?;",
-                (id_conversa,),
-            )
-            self._conexao.execute(
-                "DELETE FROM conversas_proprietarios WHERE id_conversa = ?;",
-                (id_conversa,),
+        try:
+            with self._trava, self._conexao:
+                self._checar_posse_conversa(id_conversa, id_usuario)
+                self._conexao.execute(
+                    "DELETE FROM mensagens_conversa WHERE id_conversa = ?;",
+                    (id_conversa,),
+                )
+                self._conexao.execute(
+                    "DELETE FROM conversas_proprietarios WHERE id_conversa = ?;",
+                    (id_conversa,),
+                )
+            sucesso = True
+        finally:
+            self._registrar_telemetria(
+                "limpar_historico", time.monotonic() - inicio, sucesso
             )
 
     async def salvar_mensagem(

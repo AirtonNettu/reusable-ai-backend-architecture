@@ -1,10 +1,12 @@
-"""Formatador de logs estruturados em JSON com sanitização automática de credenciais."""
+"""Formatador de logs estruturados em JSON com sanitização automática de credenciais e correlação com traces."""
 
 import datetime
 import json
 import logging
 import re
 from typing import Any
+
+from opentelemetry import trace
 
 from ai_core.adaptadores.seguranca.cofre_credenciais import CofreCredenciais
 
@@ -29,7 +31,7 @@ PADROES_REGEX_SENSIVEIS = [
 
 
 class FormatadorLogJson(logging.Formatter):
-    """Formata registros de log em formato JSON seguro e legível por coletores corporativos."""
+    """Formata registros de log em formato JSON seguro e correlacionado com OpenTelemetry e Request-ID."""
 
     def __init__(self, servico: str = "ai-backend") -> None:
         super().__init__()
@@ -52,9 +54,22 @@ class FormatadorLogJson(logging.Formatter):
             return {k: self._sanitizar_valor(k, v) for k, v in valor.items()}
         return valor
 
+    def _obter_contexto_rastreamento(self) -> tuple[str | None, str | None]:
+        """Obtém trace_id e span_id do contexto ativo do OpenTelemetry em formato hexadecimal."""
+        try:
+            span_atual = trace.get_current_span()
+            ctx = span_atual.get_span_context()
+            if ctx and ctx.is_valid:
+                return f"{ctx.trace_id:032x}", f"{ctx.span_id:016x}"
+        except Exception:  # noqa: BLE001
+            return None, None
+        return None, None
+
     def format(self, record: logging.LogRecord) -> str:
         mensagem_bruta = record.getMessage()
         mensagem_sanitizada = self._sanitizar_texto(mensagem_bruta)
+
+        trace_id, span_id = self._obter_contexto_rastreamento()
 
         dados: dict[str, Any] = {
             "timestamp": datetime.datetime.fromtimestamp(
@@ -67,6 +82,16 @@ class FormatadorLogJson(logging.Formatter):
             "arquivo": record.filename,
             "linha": record.lineno,
         }
+
+        # Injeta identificadores de correlação se disponíveis
+        if trace_id:
+            dados["trace_id"] = trace_id
+        if span_id:
+            dados["span_id"] = span_id
+
+        # Captura request_id se fornecido no registro
+        if hasattr(record, "request_id") and record.request_id:
+            dados["request_id"] = str(record.request_id)
 
         if record.exc_info:
             dados["excecao"] = self._sanitizar_texto(
@@ -98,6 +123,7 @@ class FormatadorLogJson(logging.Formatter):
                 "stack_info",
                 "thread",
                 "threadName",
+                "request_id",
             ):
                 dados[chave] = self._sanitizar_valor(chave, valor)
 

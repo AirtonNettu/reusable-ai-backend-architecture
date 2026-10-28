@@ -1,4 +1,4 @@
-"""Provedores de injeção de dependência para o AI Gateway."""
+"""Injeção de dependências para o AI Gateway."""
 
 from functools import lru_cache
 
@@ -6,14 +6,21 @@ from ai_core.adaptadores.ferramentas.registro import RegistroFerramentas
 from ai_core.adaptadores.memoria.memoria_em_memoria import MemoriaEmMemoria
 from ai_core.adaptadores.memoria.memoria_postgresql import MemoriaPostgresql
 from ai_core.adaptadores.memoria.memoria_sqlite import MemoriaSQLite
-from ai_core.adaptadores.observabilidade.observabilidade_memoria import (
-    ObservabilidadeEmMemoria,
+from ai_core.adaptadores.observabilidade.metricas_prometheus import (
+    MetricasPrometheus,
+)
+from ai_core.adaptadores.observabilidade.rastreador_otel import (
+    GerenciadorRastreamento,
 )
 from ai_core.adaptadores.provedores.simulado import AdaptadorSimulado
 from ai_core.adaptadores.roteamento.roteador import RoteadorModelos
 from ai_core.aplicacao.agentes.orquestrador import OrquestradorAgente
-from ai_core.aplicacao.casos_de_uso.caso_gerar_fluxo import CasoDeUsoGerarRespostaFluxo
-from ai_core.aplicacao.casos_de_uso.caso_gerar_resposta import CasoDeUsoGerarResposta
+from ai_core.aplicacao.casos_de_uso.caso_gerar_fluxo import (
+    CasoDeUsoGerarRespostaFluxo,
+)
+from ai_core.aplicacao.casos_de_uso.caso_gerar_resposta import (
+    CasoDeUsoGerarResposta,
+)
 from ai_core.aplicacao.casos_de_uso.caso_gerar_saida_estruturada import (
     CasoDeUsoGerarSaidaEstruturada,
 )
@@ -42,23 +49,45 @@ def obter_validador_autenticacao() -> ValidadorAutenticacao:
 
 
 @lru_cache
-def obter_repositorio_memoria() -> PortaRepositorioMemoria:
-    """Instância de repositório para retenção de conversas (Memória, SQLite ou PostgreSQL)."""
+def obter_metricas_prometheus() -> MetricasPrometheus:
+    """Instância singleton do coletor de métricas Prometheus."""
+    return MetricasPrometheus()
+
+
+@lru_cache
+def obter_gerenciador_rastreamento() -> GerenciadorRastreamento:
+    """Instância singleton do gerenciador de rastreamento OpenTelemetry."""
     config = obter_configuracoes()
-    if config.tipo_memoria == "sqlite":
-        return MemoriaSQLite(caminho_banco=config.caminho_banco_sqlite)
-    if config.tipo_memoria == "postgresql" and config.url_conexao_postgresql:
-        return MemoriaPostgresql(
-            url_conexao=config.url_conexao_postgresql,
-            max_conexoes=config.limite_conexoes_postgresql,
-        )
-    return MemoriaEmMemoria()
+    return GerenciadorRastreamento(
+        nome_servico=config.otel_nome_servico,
+        habilitado=config.otel_habilitado,
+        endpoint_otlp=config.otel_endpoint_otlp,
+    )
 
 
 @lru_cache
 def obter_observabilidade() -> PortaObservabilidade:
-    """Instância de coleta de métricas e rastreabilidade."""
-    return ObservabilidadeEmMemoria()
+    """Instância de coleta de métricas e rastreabilidade conectada ao Prometheus."""
+    return obter_metricas_prometheus()
+
+
+@lru_cache
+def obter_repositorio_memoria() -> PortaRepositorioMemoria:
+    """Instância de repositório para retenção de conversas (Memória, SQLite ou PostgreSQL)."""
+    config = obter_configuracoes()
+    obs = obter_observabilidade()
+    if config.tipo_memoria == "sqlite":
+        return MemoriaSQLite(
+            caminho_banco=config.caminho_banco_sqlite,
+            observabilidade=obs,
+        )
+    if config.tipo_memoria == "postgresql" and config.url_conexao_postgresql:
+        return MemoriaPostgresql(
+            url_conexao=config.url_conexao_postgresql,
+            max_conexoes=config.limite_conexoes_postgresql,
+            observabilidade=obs,
+        )
+    return MemoriaEmMemoria()
 
 
 @lru_cache
@@ -116,8 +145,14 @@ def obter_executor_ferramentas() -> RegistroFerramentas:
             esquema_parametros={
                 "type": "object",
                 "properties": {
-                    "valor_a": {"type": "number", "description": "Primeiro valor"},
-                    "valor_b": {"type": "number", "description": "Segundo valor"},
+                    "valor_a": {
+                        "type": "number",
+                        "description": "Primeiro valor",
+                    },
+                    "valor_b": {
+                        "type": "number",
+                        "description": "Segundo valor",
+                    },
                 },
                 "required": ["valor_a", "valor_b"],
             },
@@ -130,12 +165,17 @@ def obter_executor_ferramentas() -> RegistroFerramentas:
 
 def obter_caso_gerar_resposta() -> CasoDeUsoGerarResposta:
     """Cria o caso de uso para geração síncrona."""
+    obs = obter_observabilidade()
     return CasoDeUsoGerarResposta(
         roteador=obter_roteador(),
         repositorio_memoria=obter_repositorio_memoria(),
-        observabilidade=obter_observabilidade(),
+        observabilidade=obs,
         rastreador_consumo=obter_rastreador_consumo(),
-        disjuntor=Disjuntor(nome="gateway-geracao", limite_falhas=5),
+        disjuntor=Disjuntor(
+            nome="gateway-geracao",
+            limite_falhas=5,
+            observabilidade=obs,
+        ),
         politica_retentativa=PoliticaRetentativa(max_tentativas=3),
     )
 

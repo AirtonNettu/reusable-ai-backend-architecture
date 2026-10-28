@@ -16,6 +16,7 @@ from ai_gateway.rotas import (
     roteador_agentes,
     roteador_conclusoes,
     roteador_estruturado,
+    roteador_metricas,
     roteador_modelos,
     roteador_saude,
 )
@@ -69,6 +70,7 @@ def criar_aplicacao(
 
     # Inclusão de Rotas
     aplicacao.include_router(roteador_saude)
+    aplicacao.include_router(roteador_metricas)
     aplicacao.include_router(roteador_modelos)
     aplicacao.include_router(roteador_conclusoes)
     aplicacao.include_router(roteador_estruturado)

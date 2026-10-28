@@ -1,32 +1,25 @@
-# Estratégia de Testes Automatizados
+# Estratégia de Testes e Garantia de Qualidade
 
-Este documento descreve a pirâmide de testes, metodologia de garantia de qualidade e execução de testes automatizados da **Reusable AI Backend Architecture**.
+Este documento define a pirâmide de testes, as convenções e a cobertura automatizada da **Reusable AI Backend Architecture**.
 
 ---
 
-## 1. Princípios de QA Adotados
+## 1. Princípios da Estratégia de Testes
 
-1. **Zero Consumo de APIs Pagas**:
-   - Nenhum teste automatizado dispara requisições externas para provedores comerciais (OpenAI, Gemini, Anthropic, etc.).
-   - Utilizam-se objetos de simulação de domínio (`AdaptadorSimulado`) e transporte mock nativo do HTTPX (`httpx.MockTransport`) para testar o protocolo HTTP e a serialização JSON sem tráfego de rede real.
+1. **Testes Unitários Rápidos e Determinísticos**:
+   - Não realizam chamadas de rede externas para provedores LLM reais (OpenAI, Anthropic, Gemini, Ollama). Utilizam o `MockTransport` do `httpx` ou o `AdaptadorSimulado`.
+   - Execução em menos de 10 segundos para toda a suíte.
 
-2. **Diferenciação Estrita: Testes Simulados vs. Integração Física Real**:
-   - **Testes com Simulação (`test_memoria_postgresql.py`)**: Utilizam dublês de teste (`PoolPostgresSimulado`, `ConexaoPostgresSimulada`, `TransacaoSimulada`) para validar a lógica de migrações, isolamento de usuários e transações de forma determinística, rápida (milisegundos) e sem dependência de serviços externos.
-   - **Testes de Integração Física Real (`test_integracao_postgresql_real.py`)**: Conectam-se a uma instância ativa de banco de dados PostgreSQL 17 via driver `asyncpg` real. Exercitam conexões físicas TCP, criação real de esquemas e tabelas (`schema_migracoes`, `conversas_proprietarios`, `mensagens_conversa`), rollback em falhas de transação, concorrência massiva com `asyncio.gather` e controle anti-IDOR.
-   - **Garantia em CI**: No pipeline de CI, o teste físico é **obrigatório** (`POSTGRES_OBRIGATORIO=true`), alimentado por um contêiner de serviço PostgreSQL 17 oficial. Em desenvolvimento local, quando a porta 5432 não estiver ativa, os testes físicos são marcados como *skipped* informativamente, sem mascarar falhas no pipeline.
+2. **Testes de Contratos e Domínio Puro**:
+   - Garantem que entidades (`Mensagem`, `DefinicaoFerramenta`, `ChamadaFerramenta`, `InformacoesModelo`) sejam imutáveis (`frozen=True`) e validem regras invariantes de domínio.
 
-3. **Validação Estática e de Contratos de Infraestrutura (`test_infraestrutura_e_migracoes.py`)**:
-   - Validação automatizada da especificação do `Dockerfile` multi-stage (usuário não-root, imagens mínimas, healthchecks).
-   - Validação da arquitetura do `docker-compose.yml` (perfis opcionais, ausência de portas expostas indevidamente para o banco de dados, volumes nomeados).
-   - Validação do ciclo de vida assíncrono do Gateway e execução de migrações idempotentes via CLI (`ai_gateway.migrar`).
-
-4. **Cobertura Multicamada**:
-   - **Camada de Domínio**: Modelos imutáveis, dataclasses, contratos de ferramenta, exceções e validação JSON Schema com `$defs` e `$ref`.
+3. **Confiabilidade e Resiliência Testadas Sob Falha**:
    - **Camada de Resiliência**: Disjuntor (Circuit Breaker), retentativas com jitter, semáforo, limitador de taxa, reserva de tokens em duas fases e fallback.
-   - **Camada de Adaptadores**: Provedores LLM, memória conversacional volátil, SQLite (WAL) e PostgreSQL assíncrono com pool e migrações versionadas, ferramentas, segurança e observabilidade.
-   - **Camada de Aplicação**: Casos de uso e ciclo ReAct do agente autônomo.
-   - **Camada de Interface (Gateway)**: Endpoints FastAPI, cabeçalhos, streaming SSE, tratamento global de erros RFC 7807, autenticação e autorização multilocatário anti-spoofing.
-   - **Camada de Integração E2E**: Fluxo ponta a ponta unindo Gateway, Casos de Uso, Roteamento com Contingência, Persistência e Isolamento de Usuários.
+   - **Camada de Persistência**: SQLite em memória e em arquivo WAL com concorrência massiva de threads, PostgreSQL com pool, transações ACID e migrações idempotentes.
+
+4. **Isolamento de Ambientes**:
+   - Testes de integração física com o PostgreSQL 17 utilizam transações com rollback automático ou schemas isolados.
+   - Variável de controle `POSTGRES_OBRIGATORIO`: quando ausente, a bateria de PostgreSQL real é ignorada graciosamente (`pytest.skip`), permitindo a execução rápida em ambientes de desenvolvimento sem contêineres ativos. No pipeline de CI, `POSTGRES_OBRIGATORIO=true` é imposto, garantindo a execução mandatória.
 
 ---
 
@@ -55,8 +48,9 @@ Este documento descreve a pirâmide de testes, metodologia de garantia de qualid
 | `tests/test_seguranca_concorrencia_e_sanitizacao.py` | Concorrência massiva SQLite WAL, sanitização de logs, defesas DoS de borda e validação rigorosa de esquemas. | 6 |
 | `tests/test_auditoria_identidade_e_seguranca.py` | Prevenção de falsificação de identidade (Anti-Spoofing de X-User-ID), delegação M2M, validação fail-closed em produção, rejeição de ambientes desconhecidos e autenticação negativa. | 12 |
 | `tests/test_gateway_api.py` | Rotas FastAPI: `/health`, `/v1/modelos`, `/v1/chat/conclusoes` (síncrono e SSE streaming), `/v1/chat/estruturado`, `/v1/agentes/executar`, autenticação e RFC 7807. | 8 |
+| `tests/test_observabilidade_e_metricas.py` | Métricas Prometheus (/metrics, contadores, histogramas, gauges), autorização Bearer token, tracing OpenTelemetry (propagação W3C traceparent remoto, spans síncronos/assíncronos, sanitização de atributos), logs correlacionados com trace/span_id, concorrência de métricas e telemetria em Disjuntor, PoliticaFallback e MemoriaSQLite. | 15 |
 | `tests/test_integracao_fluxo_completo.py` | Fluxo completo Gateway -> Caso de Uso -> Roteador -> SQLite; Isolamento Multilocatário (403 Forbidden); Resiliência e Fallback sob concorrência; Chat estruturado complexo. | 4 |
-| **Total** | **Suíte Automatizada Completa** | **94 cenários** |
+| **Total** | **Suíte Automatizada Completa** | **109 cenários** |
 
 ---
 

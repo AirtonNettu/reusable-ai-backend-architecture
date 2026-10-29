@@ -48,7 +48,7 @@ Quando uma organização implementa soluções de IA sem arquitetura defensiva, 
 
 ### 1.3 Aplicação Real no Projeto
 O projeto endereça sistematicamente essas dores através de componentes dedicados:
-- **Reserva Atômica em Duas Fases**: Implementada na [`PoliticaOrcamentoTokens`](../packages/ai-core/src/ai_core/resiliencia/orcamento.py), que retém a estimativa máxima da cota orçamentária do usuário antes do envio da chamada e liquida o valor real consumido após a resposta.
+- **Reserva Atômica em Duas Fases (Escopo Intraprocesso)**: Implementada na [`PoliticaOrcamentoTokens`](../packages/ai-core/src/ai_core/resiliencia/orcamento.py), que retém a estimativa máxima da cota orçamentária do usuário antes do envio da chamada e liquida o valor real consumido após a resposta. Suas garantias contra condições de corrida TOCTOU operam no escopo intraprocesso (concorrência assíncrona entre corrotinas locais via `asyncio.Lock`).
 - **Barramento Relacional Anti-IDOR**: Implementado na verificação de propriedade no [`MemoriaPostgresql`](../packages/ai-core/src/ai_core/adaptadores/memoria/memoria_postgresql.py), validando a posse de cada sessão antes de liberar leituras ou gravações.
 - **Higienização DOM XSS na Interface Piloto**: Implementada na camada visual através da função `escapeHtml()` no script desacoplado [`piloto.py`](../services/ai-gateway/src/ai_gateway/rotas/piloto.py) e servido como `/piloto/app.js`.
 
@@ -62,12 +62,12 @@ sequenceDiagram
     participant Orcamento as PoliticaOrcamentoTokens
     participant LLM as Adaptador Provedor LLM
 
-    Note over Cliente,Orcamento: Prevenção de TOCTOU via Reserva Atômica
+    Note over Cliente,Orcamento: Prevenção de TOCTOU via Reserva Atômica (Intraprocesso)
     Cliente->>Gateway: POST /v1/chat/conclusoes (id_usuario, estimativa)
     Gateway->>Orcamento: reter_reserva(id_usuario, cota_estimada)
     alt Saldo Insuficiente
-        Orcamento-->>Gateway: Excecao: ErroOrcamentoUltrapassado
-        Gateway-->>Cliente: HTTP 429 / HTTP 402 (Interrupção Fail-Closed)
+        Orcamento-->>Gateway: Excecao: ErroLimiteOrcamentoTokens
+        Gateway-->>Cliente: HTTP 429 Too Many Requests (Interrupção Fail-Closed)
     else Reserva Retida com Sucesso
         Orcamento-->>Gateway: ID_ReservaConfirmada
         Gateway->>LLM: executar_inferencia()
@@ -79,8 +79,8 @@ sequenceDiagram
 ```
 
 ### 1.5 Decisões e Trade-offs
-- **Fail-Closed vs Fail-Open**: Em caso de incerteza, erro de configuração em ambiente de produção ou saldo insuficiente, o sistema adota comportamento *fail-closed* (bloqueia o tráfego com erro explicativo). O *trade-off* é a recusa imediata de requisições mal configuradas em prol da proteção financeira e da confidencialidade dos dados.
-- **Concorrência Local vs Distribuída**: A sincronização atual utiliza travas assíncronas em memória (`asyncio.Lock`). Em instâncias únicas ou testes de homologação, garante isolamento atômico sem latência adicional. Em topologias horizontais com múltiplos contêineres, o teto unificado exigirá um coordenador de estado distribuído externo (ex: Redis).
+- **Fail-Closed vs Fail-Open**: Em caso de incerteza, erro de configuração em ambiente de produção ou saldo insuficiente, o sistema adota comportamento *fail-closed* (bloqueia o tráfego com HTTP 429 via `manipulador_erro_dominio`). O *trade-off* é a recusa imediata de requisições que excedam o saldo em prol da proteção orçamentária do usuário.
+- **Concorrência Local vs Distribuída**: A sincronização atual utiliza travas assíncronas em memória (`asyncio.Lock`). As garantias de concorrência e mitigação de TOCTOU aplicam-se estritamente ao processo local da aplicação. Em topologias escaladas horizontalmente com múltiplos workers Uvicorn ou réplicas de contêineres, impor um teto orçamentário consolidado exige um coordenador de estado distribuído externo (como Redis com scripts transacionais em Lua).
 
 ### 1.6 Exercício Prático
 - **Desafio**: Analise o arquivo de testes [`tests/test_orcamento_tokens.py`](../tests/test_orcamento_tokens.py). Localize o teste de concorrência que dispara múltiplas reservas simultâneas e observe como o `asyncio.gather` tenta esgotar o saldo.
@@ -105,7 +105,7 @@ flowchart TD
         Borda["Middlewares de Borda: HSTS, CSP, Anti-Sniffing"]
         AuthBorda["Validador de Identidade e Anti-Spoofing (X-User-ID)"]
         RotasAPI["Rotas REST, Streaming SSE e Métricas Prometheus"]
-        CamadaBFF["BFF: Sessão Criptografada HMAC-SHA256 e Anti-CSRF"]
+        CamadaBFF["BFF: Sessão Autenticada com HMAC-SHA256 e Anti-CSRF"]
     end
 
     subgraph CoreCamada ["AI Core (packages/ai-core) - Domínio Puro e Aplicação"]
@@ -133,11 +133,11 @@ flowchart TD
 1. **`AI Core` (`packages/ai-core`)**:
    - Biblioteca de domínio Python pura e desacoplada de transporte HTTP. Encapsula entidades de negócio, contratos abstratos (*ports*), suites de resiliência e o runtime de agentes autônomos. Pode ser importada em serviços FastAPI, workers Celery, funções serverless ou ferramentas CLI.
 2. **`AI Gateway` (`services/ai-gateway`)**:
-   - Serviço de borda HTTP construído com FastAPI. Gerencia autenticação de alta entropia, cabeçalhos de segurança (HSTS estrito, CSP sem scripts inline), barramento anti-spoofing em `X-User-ID`, métricas Prometheus e uma camada intermediária **BFF (Backend-For-Frontend)** com cookies HttpOnly assinados por HMAC-SHA256 e tokens anti-CSRF.
+   - Serviço de borda HTTP construído com FastAPI. Gerencia autenticação de alta entropia, cabeçalhos de segurança (HSTS estrito, CSP sem scripts inline), barramento anti-spoofing em `X-User-ID`, métricas Prometheus e uma camada intermediária **BFF (Backend-For-Frontend)** com cookies HttpOnly autenticados por HMAC-SHA256 (código de autenticação de mensagem com chave simétrica) e tokens anti-CSRF.
 
 ### 2.3 Aplicação Real no Projeto
-- **Streaming Resiliente e Cancelamento Seguro**: O [`caso_gerar_fluxo.py`](../packages/ai-core/src/ai_core/aplicacao/casos_de_uso/caso_gerar_fluxo.py) encapsula a emissão de pedaços em bloco `try...except BaseException...finally`. Quando o cliente desconecta antecipadamente (`asyncio.CancelledError`), a reserva orçamentária é liberada de forma atômica, prevenindo vazamentos de cota (`REV-001`).
-- **Defesas Criptográficas Nativas**: Assinatura e validação em tempo constante com `hmac.compare_digest` para cookies e tokens anti-CSRF no [`piloto.py`](../services/ai-gateway/src/ai_gateway/rotas/piloto.py).
+- **Streaming Resiliente e Cancelamento Seguro**: O [`caso_gerar_fluxo.py`](../packages/ai-core/src/ai_core/aplicacao/casos_de_uso/caso_gerar_fluxo.py) encapsula a emissão de pedaços em bloco `try...except BaseException...finally`. Quando o cliente desconecta antecipadamente (`asyncio.CancelledError`), a reserva orçamentária é liberada de forma atômica no processo local, prevenindo retenção indevida de saldo intraprocesso decorrente de streaming interrompido (`REV-001`).
+- **Defesas Criptográficas Nativas**: Autenticação de integridade de mensagens com HMAC-SHA256 e validação em tempo constante com `hmac.compare_digest` para cookies e tokens anti-CSRF no [`piloto.py`](../services/ai-gateway/src/ai_gateway/rotas/piloto.py).
 - **Injeção de Cabeçalhos de Borda**: O [`cabecalhos_seguranca.py`](../services/ai-gateway/src/ai_gateway/middlewares/cabecalhos_seguranca.py) injeta `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` e `Permissions-Policy`.
 
 ### 2.4 Decisões e Trade-offs
@@ -151,7 +151,7 @@ flowchart TD
 
 ### 2.6 Perguntas de Revisão
 1. **Pergunta**: Qual a responsabilidade primordial da camada BFF na aplicação piloto em relação às credenciais de backend?
-   - *Resposta Comentada*: A camada BFF atua como intermediária segura; o navegador nunca tem acesso a chaves mestras de API ou strings de conexão com o banco de dados, utilizando apenas sessões criptografadas em cookies HttpOnly.
+   - *Resposta Comentada*: A camada BFF atua como intermediária segura; o navegador nunca tem acesso a chaves mestras de API ou strings de conexão com o banco de dados, utilizando apenas identificadores de sessão protegidos por código de autenticação de mensagem baseado em hash (HMAC-SHA256 com chave simétrica compartilhada) em cookies HttpOnly (assegurando integridade e autenticidade contra falsificação de identidade sem envolver assinaturas digitais assimétricas ou necessidade de cifragem de payload).
 2. **Pergunta**: Por que o gerador assíncrono de streaming SSE deve tratar `BaseException` em vez de apenas `Exception`?
    - *Resposta Comentada*: Em Python, `asyncio.CancelledError` e `GeneratorExit` herdam diretamente de `BaseException`. Se o tratador capturar apenas `Exception`, o cancelamento antecipado não aciona a limpeza no bloco `except`, causando retenção permanente de recursos e reservas.
 
@@ -279,11 +279,11 @@ Projetos de software robustos documentam suas escolhas fundamentais através de 
 | **[ADR 0003](adr/0003-politica-resiliencia-disjuntor-e-fallback.md)** | Resiliência e Fallback | Disjuntor (*Circuit Breaker*) de 3 estados com rota de contingência. | Requer calibração de limiares de falha para evitar aberturas precoces. |
 | **[ADR 0004](adr/0004-validacao-rigorosa-e-defesas-de-borda.md)** | Validação Rigorosa de Esquemas | Validador sintático JSON Schema com autocorreção. | Limita o volume de tentativas para evitar estouros de tempo de resposta. |
 | **[ADR 0005](adr/0005-isolamento-multilocatario-e-autorizacao-conversas.md)** | Isolamento Multilocatário | Particionamento lógico estrito por `id_usuario`. | Impõe checagem relacional obrigatória antes de qualquer acesso. |
-| **[ADR 0006](adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)** | Anti-Spoofing e PostgreSQL | Bloqueio de injeção direta de `X-User-ID` por clientes externos. | Exige delegação M2M explícita em gateway ou autenticação assinada. |
+| **[ADR 0006](adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)** | Anti-Spoofing e PostgreSQL | Bloqueio de injeção direta de `X-User-ID` por clientes externos. | Exige delegação M2M explícita em gateway ou token de autenticação validado. |
 | **[ADR 0007](adr/0007-reserva-atomica-de-tokens-em-duas-fases.md)** | Reserva Atômica de Tokens | Retenção prévia da cota máxima estimada antes da inferência. | Exige travas assíncronas e tratamento cuidadoso de cancelamento. |
 | **[ADR 0008](adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md)** | Conteinerização Segura | Imagem multi-stage rodando sob usuário não-root (`appuser`). | Imagem imutável com volume externo mapeado para persistência. |
 | **[ADR 0009](adr/0009-observabilidade-prometheus-opentelemetry-e-rastreamento-distribuido.md)** | Observabilidade e Tracing | Métricas Prometheus de baixa cardinalidade e spans OTel W3C. | Requer descarte explícito de PII e atributos de alta cardinalidade. |
-| **[ADR 0010](adr/0010-aplicacao-piloto-e-interface-bff-segura.md)** | Aplicação Piloto e Camada BFF | SPA em HTML5/Vanilla JS com cookies HttpOnly HMAC-SHA256. | Zero dependências Node.js/npm; sem ecossistemas pesados de framework SPA. |
+| **[ADR 0010](adr/0010-aplicacao-piloto-e-interface-bff-segura.md)** | Aplicação Piloto e Camada BFF | SPA em HTML5/Vanilla JS com cookies HttpOnly autenticados via HMAC-SHA256 simétrico. | Zero dependências Node.js/npm; sem ecossistemas pesados de framework SPA. |
 | **[ADR 0011](adr/0011-auditoria-e-remediacao-de-seguranca.md)** | Remediação de Segurança | Endurecimento SEC-001 a SEC-009 e revisões REV-001 a REV-003. | Eliminação de scripts inline (CSP) e remoção total de PII de traces. |
 
 ### 5.3 Diagrama de Categorização das Decisões de Arquitetura
@@ -291,7 +291,7 @@ Projetos de software robustos documentam suas escolhas fundamentais através de 
 ```mermaid
 flowchart TD
     subgraph AltaComplexidade ["Alta Complexidade / Impacto Estrutural"]
-        D1["Reserva Atômica em Duas Fases (ADR 0007)<br/>Impacto: Eliminação de TOCTOU / Proteção Financeira"]
+        D1["Reserva Atômica em Duas Fases (ADR 0007)<br/>Impacto: Mitigação de TOCTOU Intraprocesso / Controle Financeiro"]
         D2["Isolamento Anti-IDOR Relacional (ADR 0005)<br/>Impacto: Confidencialidade e Posse Multilocatário"]
         D3["BFF com Sessão HMAC e Anti-CSRF (ADR 0010)<br/>Impacto: Proteção de Credenciais no Cliente"]
     end
@@ -367,7 +367,7 @@ Em **29 de Outubro de 2026**, após a consolidação e integração dos Pull Req
 | 9 | Barramento Relacional Anti-IDOR | `GET /v1/conversas/...` | **403 Forbidden** | Tentativa de leitura de histórico com `X-User-ID: usuario_invasor` rejeitada relacionalmente; evento registrado no Prometheus. |
 | 10 | Interface Web da Aplicação Piloto | `GET /piloto` e `/piloto/app.js` | **200 OK** | HTML servido com CSP sem `'unsafe-inline'`; script estático (9.141 bytes) servido com tipo MIME `application/javascript`. |
 | 11 | Camada BFF: Barramento Anti-CSRF | `POST /piloto/api/chat` | **403 Forbidden** | Tentativa de postagem sem cabeçalho `X-CSRF-Token` rejeitada imediatamente com HTTP 403. |
-| 12 | Camada BFF: Postagem Autorizada | `POST /piloto/api/chat` | **200 OK** | Requisição intermediada com cookie assinado por HMAC e token CSRF aceita; latência de 9.9 ms. |
+| 12 | Camada BFF: Postagem Autorizada | `POST /piloto/api/chat` | **200 OK** | Requisição intermediada com cookie autenticado por HMAC e token CSRF aceita; latência de 9.9 ms. |
 | 13 | Camada BFF: Alternância Multilocatário | `POST /piloto/api/sessao` | **200 OK** | Troca controlada de `usuario_alfa` para `usuario_beta` gerando novo cookie e token CSRF. |
 | 14 | Exposição de Métricas Prometheus | `GET /metrics` | **200 OK** | 340 linhas exportadas; contadores `http_requisicoes_total` e contadores de bloqueio IDOR confirmados. |
 
@@ -489,7 +489,7 @@ Durante a revisão de código do Pull Request #5, o processo colaborativo assist
 1. **Pergunta**: Por que a supervisão humana é indispensável mesmo quando agentes autônomos de IA atingem 100% de aprovação em testes automatizados?
    - *Resposta Comentada*: Porque testes automatizados validam apenas os cenários que foram explicitamente programados. A liderança humana é responsável por avaliar riscos não modelados, conformidade regulatória, implicações financeiras e a adequação arquitetural estratégica do sistema como um todo.
 2. **Pergunta**: De que forma as regras operacionais do `AGENTS.md` previnem que agentes de IA violem os limites de Clean Architecture?
-   - *Resposta Comentada*: Ao proibir explicitamente importações de frameworks web (`fastapi`, `starlette`) ou bibliotecas de transporte HTTP dentro do pacote de domínio puro (`ai_core.dominio`), o documento atua como um contrato inegociável verificado continuamente pelo linter e pelos testes.
+   - *Resposta Comentada*: O documento `AGENTS.md` atua como protocolo de governança comportamental e meta-instrução para agentes autônomos e desenvolvedores, proibindo explicitamente que a camada de domínio puro importe frameworks web (`fastapi`, `starlette`) ou bibliotecas de transporte HTTP. Trata-se de uma diretriz de governança operacional e de orientação para o code review humano; o projeto não possui atualmente um linter arquitetural dedicado (ex: *import-linter* ou análise AST no CI) para barramento puramente automatizado dessa regra, dependendo da disciplina de autoria e da revisão técnica humana.
 
 ---
 
@@ -499,9 +499,9 @@ A jornada de desenvolvimento e homologação da **Reusable AI Backend Architectu
 
 Modelos estatísticos probabilísticos tornam-se soluções empresariais perenes e seguras apenas quando envolvidos por:
 - Domínios desacoplados via Arquitetura Hexagonal.
-- Protocolos atômicos de reserva orçamentária contra concorrência TOCTOU.
+- Protocolos atômicos de reserva orçamentária contra concorrência TOCTOU intraprocesso.
 - Persistência relacional protegida contra vulnerabilidades de autorização (anti-IDOR).
-- Camadas intermediárias seguras (BFF) com cookies criptografados e proteção anti-CSRF.
+- Camadas intermediárias seguras (BFF) com cookies de sessão autenticados com HMAC-SHA256 e proteção anti-CSRF.
 - Esteiras de teste determinísticas e observabilidade contínua de baixa cardinalidade.
 
 ### Referências Recomendadas para Estudo Continuado

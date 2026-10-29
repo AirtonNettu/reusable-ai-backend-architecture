@@ -1,123 +1,160 @@
 # Documentação de Segurança e AppSec
 
-Este documento detalha os controles de segurança de aplicação (AppSec), proteção de credenciais, autorização de execução de ferramentas e mitigação de vulnerabilidades implementados no projeto.
+Este documento detalha a arquitetura de segurança da aplicação (**AppSec**), os controles defensivos de borda, a proteção criptográfica de credenciais e sessões, o isolamento multilocatário e as remediações implementadas a partir da auditoria de segurança (**SEC-001 a SEC-009** e **REV-001 a REV-003**).
 
 ---
 
-## 1. Princípios de Segurança da Arquitetura
+## 1. Princípios Fundamentais de Segurança
 
-1. **Defesa em Profundidade (*Defense in Depth*)**: A segurança é aplicada na borda (Gateway HTTP), na orquestração (Agente) e no acesso a ferramentas externas.
-2. **Privilégio Mínimo (*Least Privilege*)**: Agentes autônomos recebem acesso apenas às ferramentas estritamente permitidas para o seu contexto (`ferramentas_permitidas`).
-3. **Não-Repúdio e Rastreabilidade**: Cada requisição recebe um `X-Request-ID` único, propagado nos logs e métricas.
-
----
-
-## 2. Proteção de Credenciais e Segredos
-
-- **`CofreCredenciais`**:
-  - Centraliza a recuperação de segredos de variáveis de ambiente.
-  - Provê método de mascaramento de credenciais (`mascarar_chave(...)`), garantindo que apenas os 4 primeiros e 4 últimos caracteres sejam visíveis em logs (ex: `sk-1...7890`), prevenindo vazamentos acidentais em dumps de telemetria.
-  - Bloqueio imediato caso credenciais obrigatórias não estejam presentes em ambientes de produção.
-
-- **Sanitização Ativa de Logs (`FormatadorLogJson`)**:
-  - Dicionários e campos extras que contenham termos sensíveis (`api_key`, `token`, `authorization`, `password`, `secret`, `bearer`) são mascarados automaticamente antes da gravação.
-  - Expressões regulares examinam o corpo de cada mensagem de log, mascarando padrões comuns de tokens (`Bearer ...`, `sk-...`, `AIza...`) para prevenir vazamentos acidentais durante depuração ou falhas de provedores.
+1. **Defesa em Profundidade (*Defense in Depth*)**: A segurança é aplicada na borda HTTP (middlewares e cabeçalhos defensivos), na autenticação e autorização (anti-spoofing e tokens), na lógica de aplicação (orçamento em duas fases e validação de esquemas) e na camada de dados (isolamento multilocatário no PostgreSQL e SQLite).
+2. **Privilégio Mínimo (*Least Privilege*)**:
+   - Agentes autônomos recebem permissão apenas para invocar ferramentas explicitamente autorizadas para o seu contexto (`ferramentas_permitidas`).
+   - Contêineres Docker executam sob usuário não-privilegiado (`appuser`, UID `10001`).
+3. **Comportamento *Fail-Closed***:
+   - Em caso de ambiguidade, ausência de credenciais obrigatórias ou configuração inconsistente em ambiente produtivo, o sistema aborta a execução imediatamente com erro descritivo em vez de operar de forma permissiva.
+4. **Minimização de Dados (*Data Minimization*)**:
+   - Dados Pessoais Identificáveis (PII) são estritamente omitidos de traces OpenTelemetry e mascarados em logs estruturados antes da gravação.
 
 ---
 
-## 3. Segurança na Execução de Ferramentas (Tool Calling)
+## 2. Governança de Credenciais e Modo *Fail-Closed* em Produção (SEC-001)
 
-A execução autônoma de ferramentas por modelos de IA apresenta riscos de *Prompt Injection* e ações destrutivas inadvertidas. A plataforma mitiga esses riscos através de:
+### 2.1 Validação de Credenciais Inseguras (`eh_credencial_insegura_producao`)
+O módulo `configuracoes.py` centraliza a inspeção de credenciais:
+- **Entropia Mínima**: Exige no mínimo 16 caracteres.
+- **Bloqueio de Chaves Padrão do Docker Compose**: Rejeita terminantemente credenciais demonstrativas conhecidas como `dev-local-master-key-12345678`, `dev-service-m2m-key-12345678` e `dev-piloto-secret-key-12345678`.
+- **Bloqueio por Prefixos e Termos Fracos**: Rejeita qualquer chave que inicie com prefixos como `dev-`, `dev_`, `teste-`, `demo-`, `exemplo-`, ou que contenha sequências triviais (`12345678`, `master-key`, `secret-key`).
 
-1. **Flag `requer_autorizacao=True`**:
-   - Ferramentas que executam operações de escrita, exclusão ou acesso a dados sensíveis são marcadas com essa flag.
-2. **`PoliticaAutorizacaoFerramenta`**:
-   - Avalia cada chamada antes da invocação.
-   - Ferramentas bloqueadas na lista negra são rejeitadas imediatamente.
-   - Ferramentas sensíveis exigem que a aplicação ou operador humano invoque previamente `aprovar_ferramenta(...)`, caso contrário a execução é barrada com `ErroFerramentaNaoAutorizada`.
-3. **Isolamento de Erros**:
-   - Falhas ou exceções levantadas dentro de funções de ferramentas são tratadas internamente e devolvidas como mensagem de erro ao modelo (`ResultadoFerramenta(sucesso=False)`), sem derrubar o processo do backend.
+### 2.2 Bloqueio no Bootstrap do AI Gateway (`validar_seguranca_producao`)
+Ao inicializar com `GATEWAY_AMBIENTE=producao`:
+- A ausência de credenciais administrativas (`GATEWAY_API_KEY`) ou o uso de chaves inseguras dispara `ValueError`, interrompendo a inicialização do contêiner.
+- Ambientes desconhecidos ou com erros de digitação (ex: `prod_typo`) são rejeitados sem fallback silencioso para desenvolvimento.
+- Em tempo de execução, o `ValidadorAutenticacao` intercepta requisições contendo chaves fracas e devolve `401 Unauthorized` imediato, sem expor a chave nos logs.
 
----
+### 2.3 Procedimento para Geração de Chaves Criptográficas Seguras
+Em produção, todas as chaves **devem** ser geradas por um gerador pseudoaleatório criptograficamente seguro (CSPRNG):
+```bash
+# Gerar chave segura com 256 bits de entropia (32 bytes em Base64 URL-safe):
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 
-## 4. Proteção Contra Esgotamento de Recursos e DoS
-
-1. **Defesas de Borda e Validação de Payloads**:
-   - Cada mensagem individual possui teto máximo de 64 KB (`65_536` caracteres).
-   - O histórico de mensagens é limitado a 200 itens por chamada.
-   - O identificador de conversa `id_conversa` é validado estritamente (`^[a-zA-Z0-9_\-\.:]+$`), bloqueando caracteres nulos e ataques de injeção.
-2. **Proteção Contra Bombas de Esquema JSON**:
-   - Esquemas submetidos à rota `/v1/chat/estruturado` são inspecionados pelo `ValidadorEsquemaJson`, que limita a profundidade de aninhamento a no máximo 5 níveis e restringe tipos permitidos.
-3. **Controle Orçamentário de Tokens (`PoliticaOrcamentoTokens`)**:
-   - Impõe tetos configuráveis de tokens por requisição individual e acumulado por sessão, interrompendo precocemente chamadas abusivas com HTTP 429 (`ErroLimiteOrcamentoTokens`).
-4. **Salvaguarda de Loops Infinitos**:
-   - O `OrquestradorAgente` impõe um teto estrito de iterações (`limite_passos`) e `timeout_segundos`. Caso o modelo entre em ciclo repetitivo, a execução é interrompida com segurança.
-5. **Controle de Concorrência e Taxa**:
-   - `LimitadorTaxa` (Token Bucket) e `SemaforoConcorrencia` protegem os provedores de exaustão de cotas e ataques de negação de serviço.
-6. **Disjuntor (*Circuit Breaker*)**:
-   - Em caso de instabilidade grave de um provedor remoto, o circuito é aberto, rejeitando chamadas no próprio servidor em microssegundos sem esperar timeouts de rede.
-
+# Alternativa via OpenSSL (hexadecimal de 256 bits):
+openssl rand -hex 32
+```
 
 ---
 
-## 5. Isolamento Multilocatário e Segregação de Histórico Conversacional
+## 3. Proteções de Borda HTTP e Cabeçalhos Defensivos (SEC-005, SEC-009, REV-002)
+
+O `MiddlewareCabecalhosSeguranca` intercepta todas as respostas HTTP e injeta defesas padronizadas:
+
+| Cabeçalho | Valor Configurado | Proteção Oferecida |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | Impede ataques de MIME sniffing pelo navegador. |
+| `X-Frame-Options` | `DENY` | Previne ataques de Clickjacking e incorporação em `<iframe>`. |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Limita o vazamento de caminhos e parâmetros em links externos. |
+| `Permissions-Policy` | `geolocation=(), microphone=(), camera=()` | Desativa APIs de hardware desnecessárias na aplicação. |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Força conexões HTTPS durante 1 ano. Injetado estritamente quando `request.url.scheme == "https"`. |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; ...` | Endurecida nas rotas `/piloto`, eliminando `'unsafe-inline'` para scripts (SEC-009). |
+
+### 3.1 Prevenção de HSTS Spoofing (REV-002 e RFC 6797 Sec 7.2)
+Para impedir que um cliente malicioso sobre HTTP puro force o cabeçalho HSTS enviando um cabeçalho forjado `X-Forwarded-Proto: https`, a aplicação **não** consulta esse cabeçalho diretamente. A validação depende estritamente de `request.url.scheme == "https"`, populado pelo servidor ASGI (Uvicorn) configurado com `--proxy-headers` e `--forwarded-allow-ips` apontando para os IPs dos proxies reversos autorizados.
+
+---
+
+## 4. Segurança da Aplicação Piloto e Camada Intermediária BFF (SEC-002, SEC-004, SEC-009)
+
+A aplicação piloto adota o padrão BFF (Backend-For-Frontend) para proteger o navegador:
+
+1. **Prevenção de DOM XSS (SEC-002)**:
+   - A função cliente `escapeHtml()` sanitiza rigorosamente qualquer entrada interpolada via `innerHTML`, convertendo caracteres perigosos (`&`, `<`, `>`, `"`, `'`).
+   - Rótulos de cabeçalho, mensagens de erro e indicadores utilizam estritamente nós DOM seguros via `textContent`.
+2. **Desacoplamento do Segredo de Sessão (SEC-004)**:
+   - O segredo de assinatura de cookies HMAC é obtido exclusivamente da variável `GATEWAY_PILOTO_SEGREDO_SESSAO`.
+   - Eliminado o fallback para `GATEWAY_API_KEY`. Em produção, a ausência do segredo dedicado dispara interrupção *fail-closed* e HTTP 500 imediato caso acessado.
+3. **Sessão Segura HMAC-SHA256 e Anti-CSRF**:
+   - Cookie `piloto_sessao`: assinado criptograficamente no formato `id_usuario.timestamp.hmac` com flags `HttpOnly=True`, `SameSite="Lax"` e `Secure=True` (em HTTPS ou produção).
+   - Cabeçalho `X-CSRF-Token`: obrigatório em mutações de estado (`POST /piloto/api/chat` e `POST /piloto/api/sessao`), validado em tempo constante com `hmac.compare_digest` contra ataques de temporização.
+4. **Externalização do JavaScript da SPA (SEC-009)**:
+   - Todo o script client-side foi extraído para a rota `/piloto/app.js`. Handlers inline legados (`onclick`, `onkeydown`) foram substituídos por ouvintes `addEventListener`, permitindo a remoção de `'unsafe-inline'` da CSP.
+
+---
+
+## 5. Isolamento Multilocatário e Prevenção IDOR (SEC-003, ADR 0005)
 
 1. **Titularidade de Conversas**:
    - Cada conversa (`id_conversa`) criada possui um titular associado (`id_usuario`).
-   - A posse é vinculada no momento da inserção da primeira mensagem, tanto na `MemoriaEmMemoria` quanto no `MemoriaSQLite`.
-2. **Prevenção contra Acesso Cruzado e IDOR**:
-   - Tentativas de consultar, continuar ou limpar o histórico de uma conversa registrada por outro identificador de usuário são bloqueadas imediatamente com `ErroAcessoNaoAutorizadoConversa`.
-   - O AI Gateway mapeia essa exceção para **HTTP 403 Forbidden** no formato RFC 7807, impedindo qualquer vazamento ou adulteração de contexto conversacional.
-3. **Limitação Orçamentária por Usuário**:
-   - A `PoliticaOrcamentoTokens` suporta quotas individuais (`limite_tokens_por_usuario`), garantindo que nenhum usuário ou tenant monopolize a cota global da aplicação.
-
-
----
-
-## 6. Prevenção de Falsificação de Identidade (Anti-Spoofing de X-User-ID)
-
-1. **Separação de Privilégios M2M vs Cliente**:
-   - Clientes regulares autenticados via token ou chave de API possuem seu identificador de usuário vinculado de forma determinística à sua credencial (`mapeamento_chaves_usuarios` ou hash seguro da chave).
-   - O cabeçalho `X-User-ID` fornecido pelo cliente é auditado rigorosamente: se um cliente regular tentar informar um identificador divergente daquele associado à sua chave, o Gateway intercepta a tentativa de personificação e responde com **HTTP 403 Forbidden**.
-   - Apenas serviços corporativos confiáveis (chaves em `chaves_servicos_confiaveis` ou chave mestre sem vínculo restrito) possuem permissão para delegar/representar identidades de terceiros via `X-User-ID`.
-2. **Reserva Atômica de Cotas (Anti-Race Condition)**:
-   - A `PoliticaOrcamentoTokens` impede que múltiplos disparos simultâneos explorem janelas de concorrência (TOCTOU).
-   - Os tokens são reservados atimicamente sob lock antes da invocação do modelo, e liberados automaticamente caso a requisição falhe por timeout ou erro do provedor externo.
+   - A posse é vinculada no momento da inserção da primeira mensagem, tanto no `MemoriaPostgresql` quanto no `MemoriaSQLite`.
+2. **Prevenção de IDOR e Acesso Cruzado**:
+   - Tentativas de consultar (`GET /v1/conversas/{id_conversa}`), continuar ou limpar (`DELETE /v1/conversas/{id_conversa}`) conversas registradas por outro usuário são bloqueadas com `ErroAcessoNaoAutorizadoConversa`, mapeado para **HTTP 403 Forbidden** (RFC 7807).
+3. **Auditoria Anti-Spoofing de `X-User-ID`**:
+   - Clientes comuns com chaves de API não podem declarar arbitrariamente o cabeçalho `X-User-ID` para personificar terceiros. Qualquer discrepância resulta em **HTTP 403 Forbidden**.
+   - Apenas chaves M2M em `GATEWAY_CHAVES_CONFIAVEIS` possuem autorização para delegar identidades de usuários.
 
 ---
 
-## 7. Governança de Credenciais e Modo Fail-Closed em Produção
+## 6. Governança Orçamentária e Prevenção de DoS (SEC-003, SEC-006, REV-001)
 
-1. **Inicialização Segura (Fail-Closed)**:
-   - Quando configurado com `ambiente="producao"` (`GATEWAY_AMBIENTE=producao`), o Gateway executa validação estrita no startup (`validar_seguranca_producao`).
-   - A inicialização é abortada imediatamente caso não haja credenciais configuradas ou caso sejam fornecidas chaves padrão/demonstração (como `chave-teste-padrao`, `chave-servico-confiavel`, `admin`, `secret`, etc.) ou com entropia insuficiente (< 16 caracteres), tanto para chaves mestres quanto para serviços confiáveis M2M.
-2. **Rejeição de Ambientes Desconhecidos (Sem Fallback Silencioso)**:
-   - A configuração inspeciona `GATEWAY_AMBIENTE`, `ENVIRONMENT` ou `APP_ENV` contra a lista restrita de ambientes permitidos (`producao`, `desenvolvimento`, `teste`, `homologacao`).
-   - Qualquer valor divergente, não reconhecido ou com erros de digitação (ex: `prod_typo`) aborta imediatamente a carga com `ValueError`, impedindo o fallback silencioso para o modo permissivo de desenvolvimento.
-3. **Validação em Tempo de Execução**:
-   - Toda requisição recebida em ambiente de produção é inspecionada: chaves de demonstração são rejeitadas com HTTP 401 Unauthorized, sem expor o valor da chave em mensagens de erro ou logs de auditoria.
-4. **Procedimento de Geração Criptográfica Segura de Credenciais**:
-   - As credenciais de produção **devem** ser geradas através de gerador de números pseudoaleatórios criptograficamente seguro (CSPRNG).
-   - Comandos recomendados para geração (sem expor segredos no repositório):
-     ```bash
-     # Gerar chave com 256 bits de entropia (32 bytes em formato URL-safe base64)
-     python -c "import secrets; print(secrets.token_urlsafe(32))"
+### 6.1 Protocolo de Reserva Atômica em Duas Fases (`PoliticaOrcamentoTokens`)
+Para evitar estouro de cotas decorrente de requisições concorrentes (condições de corrida TOCTOU):
+1. **Fase 1 (Pré-reserva Atômica)**: Antes de disparar a requisição ao modelo, a cota estimada (`tokens_entrada + max_tokens`) é retida sob lock (`asyncio.Lock()`). Se o teto for ultrapassado, rejeita com HTTP 429 (`ErroLimiteOrcamentoTokens`).
+2. **Fase 2 (Confirmação Real)**: Após o modelo responder, a reserva estimada é liquidada pelo número exato de tokens consumidos.
 
-     # Alternativa via OpenSSL (hexadecimal de 256 bits)
-     openssl rand -hex 32
-     ```
-   - As chaves geradas devem ser injetadas exclusivamente por variáveis de ambiente (`GATEWAY_API_KEY`, `GATEWAY_CHAVES_CONFIAVEIS`) ou cofres de segredos gerenciados (HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager), nunca salvas no código-fonte.
-5. **Preservação do Modo de Desenvolvimento**:
-   - Em `ambiente="desenvolvimento"`, o Gateway mantém tolerância a chaves locais demonstrativas para permitir testes rápidos sem complexidade desnecessária.
+### 6.2 Cancelamento Seguro em Streaming SSE (SEC-006 e REV-001)
+- O gerador assíncrono em `CasoDeUsoGerarRespostaFluxo` é estruturado em `try...except BaseException...finally` com flag atômica `reserva_finalizada`.
+- Cancelamentos por desconexão do cliente (`asyncio.CancelledError`), fechamento antecipado com `aclose()` (`GeneratorExit`) ou falhas do provedor LLM liberam imediatamente a reserva retida na `PoliticaOrcamentoTokens`, prevenindo esgotamento indevido do saldo do usuário.
+
+### 6.3 Orçamento no Ciclo de Agentes ReAct (SEC-003)
+- O `OrquestradorAgente` executa pré-reserva atômica de tokens a cada iteração do ciclo ReAct, debitando o consumo real após a chamada ao modelo e liberando a cota em caso de erro.
 
 ---
 
-## 8. Riscos Operacionais Documentados e Limitações de Escala
+## 7. Segurança na Execução de Ferramentas (Tool Calling)
+
+A execução autônoma de ferramentas por modelos de IA apresenta riscos de *Prompt Injection* e ações destrutivas. A plataforma mitiga esses riscos através de:
+1. **Flag `requer_autorizacao=True`**: Ferramentas que realizam mutação de dados, deleção ou chamadas externas sensíveis devem ser marcadas com essa flag.
+2. **`PoliticaAutorizacaoFerramenta`**: Avalia cada chamada antes da invocação. Ferramentas sensíveis exigem autorização prévia (`aprovar_ferramenta`), e ferramentas em lista negra são rejeitadas imediatamente com `ErroFerramentaNaoAutorizada` (HTTP 403).
+3. **Tratamento de Exceções**: Falhas em ferramentas são capturadas e devolvidas como mensagem de erro controlada ao modelo (`ResultadoFerramenta(sucesso=False)`), sem comprometer o processo do backend.
+
+---
+
+## 8. Segurança na Observabilidade e Telemetria (SEC-008, REV-003)
+
+1. **Autenticação Fail-Closed em `/metrics` (SEC-008)**:
+   - Em produção, se nenhuma credencial estiver configurada, o endpoint responde `403 Forbidden`.
+   - Se configurado `GATEWAY_METRICAS_TOKEN`, exige autenticação via `Authorization: Bearer <token>` com comparação em tempo constante (`hmac.compare_digest`).
+2. **Minimização de Dados em Spans OpenTelemetry (REV-003)**:
+   - O identificador do usuário (`agente.id_usuario`) foi completamente omitido dos spans OpenTelemetry, eliminando qualquer vazamento de PII (LGPD / GDPR) para plataformas de APM. Spans registram apenas metadados operacionais não identificáveis (`agente.nome`, `agente.modelo`, `agente.limite_passos`).
+3. **Sanitização Ativa de Logs (`FormatadorLogJson`)**:
+   - Dicionários de logs mascaram automaticamente chaves como `api_key`, `token`, `authorization`, `password`, `secret` e `bearer`.
+   - Expressões regulares examinam o corpo de mensagens de erro, substituindo padrões como `sk-...`, `Bearer ...` e `AIza...` por `[CREDENTIAL_REDACTED]`.
+
+---
+
+## 9. Segurança da Infraestrutura e Cadeia de Suprimentos (SEC-007)
+
+1. **Isolamento no `.dockerignore`**:
+   - O arquivo `.dockerignore` exclui explicitamente o diretório `.agents/`, o arquivo `skills-lock.json` e relatórios de auditoria, impedindo sua inclusão acidental na imagem de produção.
+2. **Análise de Vulnerabilidades de Dependências (SCA no CI)**:
+   - O pipeline do GitHub Actions (`.github/workflows/ci.yml`) inclui step obrigatório de SCA executando `uv run --with pip-audit pip-audit`, garantindo a ausência de CVEs conhecidas nas bibliotecas utilizadas.
+
+---
+
+## 10. Limitações e Riscos Residuais Documentados
 
 1. **Orçamento e Rate Limiting Confinados à Memória Local**:
-   - A `PoliticaOrcamentoTokens` e o `LimitadorTaxa` utilizam estruturas atômicas locais sincronizadas via `asyncio.Lock()`.
-   - **Atenção**: Esta implementação protege com exatidão a concorrência intraprocesso em monólito com uma réplica. Em topologias com **múltiplas réplicas/pods ou múltiplos workers**, as cotas e limites são particionados por processo, não garantindo um teto orçamentário global consolidado entre nós distintos.
-   - Para assegurar quotas rígidas em clusters horizontais, deve-se planejar a adoção de uma porta de coordenação de estado distribuído (ex: Redis ou advisory locks em PostgreSQL) no roadmap de escala.
-2. **Limites Configuráveis do Pool de Conexões PostgreSQL**:
-   - A persistência assíncrona (`MemoriaPostgresql`) utiliza limites configuráveis: `min_conexoes` (padrão: 2) e `max_conexoes` (padrão: 10, parametrizável via `GATEWAY_POSTGRES_POOL_SIZE` ou construtor).
-   - Ao dimensionar o número de réplicas do AI Gateway em produção, o arquiteto de infraestrutura deve calcular: `Total Conexões = Réplicas * GATEWAY_POSTGRES_POOL_SIZE` para evitar esgotamento de `max_connections` no servidor PostgreSQL, sendo recomendado o uso de PgBouncer em implantações de grande porte.
+   - A `PoliticaOrcamentoTokens` e o `LimitadorTaxa` utilizam locks em memória volátil (`asyncio.Lock()`). Em topologias com múltiplos pods ou múltiplos workers Uvicorn, as cotas são particionadas por processo, não garantindo um teto global unificado sem a adoção de um coordenador de estado distribuído (ex: Redis).
+2. **Necessidade de Configuração de Proxies Reversos de Borda**:
+   - Em produção sob balanceadores, o Uvicorn deve ser configurado com `--proxy-headers` e `--forwarded-allow-ips` para validar confiavelmente o esquema HTTPS para HSTS.
+3. **Gestão de Segredos**:
+   - As variáveis sensíveis devem ser injetadas por cofres gerenciados (HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager).
+
+---
+
+## 11. Referências
+
+- [ADR 0004: Validação Rigorosa e Defesas de Borda](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
+- [ADR 0005: Isolamento Multilocatário e Autorização de Conversas](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0005-isolamento-multilocatario-e-autorizacao-conversas.md)
+- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
+- [ADR 0007: Protocolo de Reserva Atômica de Tokens em Duas Fases](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0007-reserva-atomica-de-tokens-em-duas-fases.md)
+- [ADR 0010: Aplicação Piloto e Interface BFF Segura](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
+- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0011-auditoria-e-remediacao-de-seguranca.md)

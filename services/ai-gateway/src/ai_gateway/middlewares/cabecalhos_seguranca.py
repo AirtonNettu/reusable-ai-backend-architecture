@@ -23,12 +23,11 @@ class MiddlewareCabecalhosSeguranca(BaseHTTPMiddleware):
         # Política de Referrer defensiva
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
-        # HSTS injetado estritamente em conexões HTTPS
-        eh_https = (
-            request.url.scheme == "https"
-            or request.headers.get("x-forwarded-proto", "").lower() == "https"
-        )
-        if eh_https:
+        # HSTS injetado estritamente quando o esquema for validado como HTTPS pela infraestrutura (RFC 6797 Sec 7.2)
+        # Não confia diretamente em cabeçalhos não-validados de clientes como X-Forwarded-Proto.
+        # Em produção atrás de proxy reverso (Nginx/Traefik/Cloudflare), o servidor ASGI (Uvicorn com
+        # --proxy-headers e IPs confiáveis) valida a origem e popula request.url.scheme como 'https'.
+        if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
             )

@@ -34,12 +34,14 @@ class OrquestradorAgente:
         modelo_padrao: str,
         observabilidade: PortaObservabilidade | None = None,
         politica_orcamento: PoliticaOrcamentoTokens | None = None,
+        rastreador: object | None = None,
     ) -> None:
         self._roteador = roteador
         self._executor_ferramentas = executor_ferramentas
         self._modelo_padrao = modelo_padrao
         self._observabilidade = observabilidade
         self._politica_orcamento = politica_orcamento
+        self._rastreador = rastreador or rastreador_global
 
     def _filtrar_ferramentas(
         self, permitidas: tuple[str, ...]
@@ -67,10 +69,9 @@ class OrquestradorAgente:
             "agente.nome": configuracao.nome,
             "agente.modelo": self._modelo_padrao,
             "agente.limite_passos": configuracao.limite_passos,
-            "agente.id_usuario": id_usuario or "anonimo",
         }
 
-        async with rastreador_global.iniciar_span_assincrono(
+        async with self._rastreador.iniciar_span_assincrono(
             "agente.executar", atributos=atributos_span
         ) as span:
             mensagens_ciclo: list[Mensagem] = [
@@ -121,7 +122,7 @@ class OrquestradorAgente:
                         await self._politica_orcamento.confirmar_reserva(
                             reserva.id_reserva, resposta.uso.total_tokens
                         )
-                except Exception:
+                except BaseException:
                     if self._politica_orcamento and reserva is not None:
                         await self._politica_orcamento.cancelar_reserva(
                             reserva.id_reserva

@@ -1,5 +1,7 @@
 """Testes automatizados específicos para validação das remediações da auditoria de segurança (SEC-001 a SEC-007)."""
 
+from collections.abc import AsyncIterator
+
 import pytest
 from ai_core.adaptadores.ferramentas.registro import RegistroFerramentas
 from ai_core.adaptadores.provedores.simulado import AdaptadorSimulado
@@ -7,8 +9,9 @@ from ai_core.adaptadores.roteamento.roteador import RoteadorModelos
 from ai_core.aplicacao.agentes.orquestrador import OrquestradorAgente
 from ai_core.aplicacao.casos_de_uso.caso_gerar_fluxo import CasoDeUsoGerarRespostaFluxo
 from ai_core.dominio.modelos.agente import ConfiguracaoAgente
-from ai_core.dominio.modelos.geracao import RequisicaoGeracao
+from ai_core.dominio.modelos.geracao import RequisicaoGeracao, RespostaGeracao
 from ai_core.dominio.modelos.mensagem import Mensagem
+from ai_core.dominio.portas.porta_provedor import PortaProvedorLLM
 from ai_core.resiliencia.orcamento import (
     ErroLimiteOrcamentoTokens,
     PoliticaOrcamentoTokens,
@@ -376,3 +379,261 @@ def test_sec009_html_piloto_sem_atributos_inline_de_eventos() -> None:
     assert "onclick=" not in HTML_PAGINA_PILOTO
     assert "onkeydown=" not in HTML_PAGINA_PILOTO
     assert "onchange=" not in HTML_PAGINA_PILOTO
+
+
+# ==============================================================================
+# REVISÃO PR #5 - ETAPA 1: Cancelamento e Ciclo de Vida do Streaming SSE
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_revisao_pr5_etapa1_streaming_concluido_normalmente_confirma_reserva() -> (
+    None
+):
+    """Verifica liquidação normal da reserva de tokens ao término do streaming."""
+    roteador = RoteadorModelos()
+    adaptador = AdaptadorSimulado(nome_provedor="simulado", atraso_segundos=0.0)
+    roteador.registrar_provedor(adaptador)
+
+    orcamento = PoliticaOrcamentoTokens(
+        limite_tokens_por_requisicao=1000,
+        limite_tokens_por_usuario=500,
+    )
+    caso_fluxo = CasoDeUsoGerarRespostaFluxo(
+        roteador=roteador, politica_orcamento=orcamento
+    )
+    req = RequisicaoGeracao(
+        modelo="modelo-teste", mensagens=(Mensagem(papel="usuario", conteudo="Oi"),)
+    )
+
+    pedacos = [p async for p in caso_fluxo.executar(req, id_usuario="usr_normal")]
+    assert len(pedacos) > 0
+    assert await orcamento.obter_tokens_reservados() == 0
+    assert await orcamento.obter_tokens_acumulados() > 0
+
+
+@pytest.mark.asyncio
+async def test_revisao_pr5_etapa1_streaming_falha_provedor_cancela_reserva() -> None:
+    """Garante que falha do provedor durante o streaming cancele a reserva e libere o saldo."""
+    roteador = RoteadorModelos()
+    adaptador = AdaptadorSimulado(
+        nome_provedor="simulado",
+        excecao_para_lancar=RuntimeError("Falha simulada no provedor LLM"),
+    )
+    roteador.registrar_provedor(adaptador)
+
+    orcamento = PoliticaOrcamentoTokens(
+        limite_tokens_por_requisicao=1000,
+        limite_tokens_por_usuario=500,
+    )
+    caso_fluxo = CasoDeUsoGerarRespostaFluxo(
+        roteador=roteador, politica_orcamento=orcamento
+    )
+    req = RequisicaoGeracao(
+        modelo="modelo-teste", mensagens=(Mensagem(papel="usuario", conteudo="Oi"),)
+    )
+
+    with pytest.raises(RuntimeError, match="Falha simulada no provedor LLM"):
+        _ = [p async for p in caso_fluxo.executar(req, id_usuario="usr_falha")]
+
+    assert await orcamento.obter_tokens_reservados() == 0
+
+
+@pytest.mark.asyncio
+async def test_revisao_pr5_etapa1_streaming_cancelamento_asyncio_cancela_reserva() -> (
+    None
+):
+    """Garante que cancelamento via asyncio.CancelledError libere a reserva de tokens."""
+    import asyncio
+
+    from ai_core.dominio.modelos.geracao import PedacoResposta
+
+    class AdaptadorComAtraso(PortaProvedorLLM):
+        @property
+        def nome_provedor(self) -> str:
+            return "lento"
+
+        @property
+        def modelos_suportados(self) -> tuple[str, ...]:
+            return ("modelo-teste",)
+
+        async def validar_disponibilidade(self) -> bool:
+            return True
+
+        async def gerar(self, requisicao: RequisicaoGeracao) -> RespostaGeracao:
+            raise NotImplementedError
+
+        async def gerar_fluxo(
+            self, requisicao: RequisicaoGeracao
+        ) -> AsyncIterator[PedacoResposta]:
+            yield PedacoResposta(texto="chunk1")
+            await asyncio.sleep(5.0)
+            yield PedacoResposta(texto="chunk2")
+
+    roteador = RoteadorModelos()
+    roteador.registrar_provedor(AdaptadorComAtraso())
+
+    orcamento = PoliticaOrcamentoTokens(
+        limite_tokens_por_requisicao=1000,
+        limite_tokens_por_usuario=500,
+    )
+    caso_fluxo = CasoDeUsoGerarRespostaFluxo(
+        roteador=roteador, politica_orcamento=orcamento
+    )
+    req = RequisicaoGeracao(
+        modelo="modelo-teste", mensagens=(Mensagem(papel="usuario", conteudo="Oi"),)
+    )
+
+    async def consumidor() -> None:
+        async for _ in caso_fluxo.executar(req, id_usuario="usr_cancel"):
+            pass
+
+    task = asyncio.create_task(consumidor())
+    await asyncio.sleep(0.05)
+    assert await orcamento.obter_tokens_reservados() > 0
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await orcamento.obter_tokens_reservados() == 0
+
+
+@pytest.mark.asyncio
+async def test_revisao_pr5_etapa1_streaming_fechamento_antecipado_aclose_cancela_reserva() -> (
+    None
+):
+    """Garante que fechar o gerador prematuramente com aclose() cancele a reserva sem vazamentos."""
+    roteador = RoteadorModelos()
+    adaptador = AdaptadorSimulado(nome_provedor="simulado", atraso_segundos=0.0)
+    roteador.registrar_provedor(adaptador)
+
+    orcamento = PoliticaOrcamentoTokens(
+        limite_tokens_por_requisicao=1000,
+        limite_tokens_por_usuario=500,
+    )
+    caso_fluxo = CasoDeUsoGerarRespostaFluxo(
+        roteador=roteador, politica_orcamento=orcamento
+    )
+    req = RequisicaoGeracao(
+        modelo="modelo-teste", mensagens=(Mensagem(papel="usuario", conteudo="Oi"),)
+    )
+
+    gen = caso_fluxo.executar(req, id_usuario="usr_aclose")
+    primeiro = await anext(gen)
+    assert primeiro is not None
+    await gen.aclose()
+
+    assert await orcamento.obter_tokens_reservados() == 0
+
+
+# ==============================================================================
+# REVISÃO PR #5 - ETAPA 2: Validação Estrita de Esquema HTTPS e X-Forwarded-Proto
+# ==============================================================================
+
+
+def test_revisao_pr5_etapa2_requisicao_http_sem_proxy_nao_emite_hsts() -> None:
+    """Garante que requisição em HTTP puro não receba cabeçalho HSTS."""
+    config = ConfiguracoesGateway(ambiente="desenvolvimento")
+    app = criar_aplicacao(configuracoes=config)
+    cliente = TestClient(app, base_url="http://localhost")
+
+    resp = cliente.get("/health")
+    assert resp.status_code == 200
+    assert "Strict-Transport-Security" not in resp.headers
+
+
+def test_revisao_pr5_etapa2_requisicao_http_com_x_forwarded_proto_forjado_bloqueia_hsts() -> (
+    None
+):
+    """Garante que cliente não possa forjar HSTS em transporte HTTP inseguro via X-Forwarded-Proto forjado."""
+    config = ConfiguracoesGateway(ambiente="desenvolvimento")
+    app = criar_aplicacao(configuracoes=config)
+    cliente = TestClient(app, base_url="http://localhost")
+
+    resp = cliente.get("/health", headers={"X-Forwarded-Proto": "https"})
+    assert resp.status_code == 200
+    assert "Strict-Transport-Security" not in resp.headers
+
+
+def test_revisao_pr5_etapa2_requisicao_https_real_emite_hsts() -> None:
+    """Garante que sob transporte HTTPS validado pelo ASGI/infraestrutura o HSTS seja emitido."""
+    config = ConfiguracoesGateway(ambiente="desenvolvimento")
+    app = criar_aplicacao(configuracoes=config)
+    cliente = TestClient(app, base_url="https://gateway.empresa.com.br")
+
+    resp = cliente.get("/health")
+    assert resp.status_code == 200
+    assert "Strict-Transport-Security" in resp.headers
+    assert (
+        "max-age=31536000; includeSubDomains"
+        in resp.headers["Strict-Transport-Security"]
+    )
+
+
+# ==============================================================================
+# REVISÃO PR #5 - ETAPA 3: Privacidade de Identidade em Spans OpenTelemetry
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_revisao_pr5_etapa3_orquestrador_remove_identidade_do_usuario_dos_spans() -> (
+    None
+):
+    """Garante que PII/identidade sensível do usuário seja totalmente omitida dos spans de telemetria."""
+    import ai_core.adaptadores.observabilidade.rastreador_otel as otel_modulo
+    from ai_core.adaptadores.observabilidade.rastreador_otel import (
+        ExportadorSpansMemoria,
+        GerenciadorRastreamento,
+    )
+
+    exportador = ExportadorSpansMemoria()
+    gerenciador_teste = GerenciadorRastreamento(
+        nome_servico="teste-privacidade",
+        habilitado=True,
+        exportador_customizado=exportador,
+    )
+
+    original_rastreador = otel_modulo.rastreador_global
+    otel_modulo.rastreador_global = gerenciador_teste
+
+    try:
+        roteador = RoteadorModelos()
+        adaptador = AdaptadorSimulado(nome_provedor="simulado", atraso_segundos=0.0)
+        roteador.registrar_provedor(adaptador)
+
+        registro = RegistroFerramentas()
+        orquestrador = OrquestradorAgente(
+            roteador=roteador,
+            executor_ferramentas=registro,
+            modelo_padrao="modelo-teste",
+            rastreador=gerenciador_teste,
+        )
+        config_agente = ConfiguracaoAgente(
+            nome="agente-privacidade",
+            instrucao_sistema="Instrução do teste",
+            limite_passos=1,
+        )
+
+        id_usuario_sensivel = "usuario.confidencial@corp.empresa.com.br"
+        resultado = await orquestrador.executar(
+            objetivo="Objetivo de teste de privacidade",
+            configuracao=config_agente,
+            id_usuario=id_usuario_sensivel,
+        )
+        assert resultado.sucesso is True
+
+        spans = exportador.obter_spans_finalizados()
+        spans_agente = [s for s in spans if s.name == "agente.executar"]
+        assert len(spans_agente) > 0
+
+        span_execucao = spans_agente[0]
+        valores_atributos = [str(v) for v in span_execucao.attributes.values()]
+        assert not any(id_usuario_sensivel in v for v in valores_atributos)
+        assert "agente.id_usuario" not in span_execucao.attributes
+        assert "agente.id_usuario_hash" not in span_execucao.attributes
+        assert span_execucao.attributes["agente.nome"] == "agente-privacidade"
+        assert span_execucao.attributes["agente.modelo"] == "modelo-teste"
+        assert span_execucao.attributes["agente.limite_passos"] == 1
+    finally:
+        otel_modulo.rastreador_global = original_rastreador

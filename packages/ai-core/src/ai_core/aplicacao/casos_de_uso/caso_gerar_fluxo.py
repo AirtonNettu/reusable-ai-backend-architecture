@@ -82,6 +82,7 @@ class CasoDeUsoGerarRespostaFluxo:
             )
 
         tokens_saida_estimados = 0
+        reserva_finalizada = False
         try:
             async for pedaco in self._roteador.gerar_fluxo(requisicao_efetiva):
                 if pedaco.texto:
@@ -90,10 +91,24 @@ class CasoDeUsoGerarRespostaFluxo:
 
             if self._politica_orcamento and reserva is not None:
                 total_real = estimativa_entrada + tokens_saida_estimados
+                reserva_finalizada = True
                 await self._politica_orcamento.confirmar_reserva(
                     reserva.id_reserva, total_real
                 )
-        except Exception:
-            if self._politica_orcamento and reserva is not None:
+        except BaseException:
+            if (
+                self._politica_orcamento
+                and reserva is not None
+                and not reserva_finalizada
+            ):
+                reserva_finalizada = True
                 await self._politica_orcamento.cancelar_reserva(reserva.id_reserva)
             raise
+        finally:
+            if (
+                self._politica_orcamento
+                and reserva is not None
+                and not reserva_finalizada
+            ):
+                reserva_finalizada = True
+                await self._politica_orcamento.cancelar_reserva(reserva.id_reserva)

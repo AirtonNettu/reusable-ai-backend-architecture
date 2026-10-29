@@ -37,6 +37,7 @@ async def executar_agente(
     resultado = await orquestrador.executar(
         objetivo=requisicao.objetivo,
         configuracao=config_dominio,
+        id_usuario=_autenticado,
     )
 
     passos_esquema = [

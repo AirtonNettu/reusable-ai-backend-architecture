@@ -29,3 +29,7 @@ htmlcov/
 # Documentação pesada e logs
 *.log
 docs/
+
+# Skills de auditoria e desenvolvimento
+.agents/
+skills-lock.json

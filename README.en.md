@@ -16,6 +16,7 @@ Enterprise, decoupled, and reusable backend platform for modern Artificial Intel
   <a href="https://docs.pytest.org/"><img src="https://img.shields.io/badge/Tests-159%20passed-success.svg" alt="Pytest" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff" /></a>
   <a href="https://pypi.org/project/pip-audit/"><img src="https://img.shields.io/badge/Security-0%20vulnerabilities-brightgreen.svg" alt="pip-audit" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="License: Apache-2.0" /></a>
 </p>
 
 ---
@@ -272,3 +273,30 @@ For a detailed case study on human-AI governance and collaboration in software e
 - **Continuous Integration Pipeline**: [GitHub Actions Workflow Runs](https://github.com/AirtonNettu/reusable-ai-backend-architecture/actions)
 - **Primary Architecture Document**: [docs/arquitetura.md](docs/arquitetura.md)
 - **The Seven Pillars Technical Handbook**: [docs/caderno_tecnico.md](docs/caderno_tecnico.md)
+
+
+---
+
+## 12. License & Terms of Use
+
+This project is open-source software licensed under the [**Apache License, Version 2.0**](LICENSE).
+
+You are free to use, reproduce, modify, distribute, and sublicense this architecture and its components for both commercial and non-commercial purposes, provided that original copyright notices and license conditions are preserved.
+
+For full legal details regarding patent grants, warranties, and liability limitations, see the [LICENSE](LICENSE) and [NOTICE](NOTICE) files.
+
+```text
+Copyright 2026 Airton Neto
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```

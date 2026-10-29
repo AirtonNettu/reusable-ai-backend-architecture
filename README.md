@@ -16,6 +16,7 @@ Plataforma corporativa desacoplada e reutilizável para aplicações de Intelig�
   <a href="https://docs.pytest.org/"><img src="https://img.shields.io/badge/Tests-159%20passed-success.svg" alt="Pytest" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff" /></a>
   <a href="https://pypi.org/project/pip-audit/"><img src="https://img.shields.io/badge/Security-0%20vulnerabilities-brightgreen.svg" alt="pip-audit" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="License: Apache-2.0" /></a>
 </p>
 
 ---
@@ -272,3 +273,30 @@ Para um estudo de caso aprofundado sobre governança e colaboração humano-IA n
 - **Pipeline de Integração Contínua**: [GitHub Actions Workflow Runs](https://github.com/AirtonNettu/reusable-ai-backend-architecture/actions)
 - **Documentação Arquitetural Principal**: [docs/arquitetura.md](docs/arquitetura.md)
 - **Caderno Técnico dos Sete Pilares**: [docs/caderno_tecnico.md](docs/caderno_tecnico.md)
+
+
+---
+
+## 12. Licença e Termos de Uso
+
+Este projeto é um software de código aberto distribuído sob os termos da [**Apache License, Version 2.0**](LICENSE).
+
+Você tem a liberdade de utilizar, reproduzir, modificar, distribuir e sublicenciar esta arquitetura e seus componentes, tanto para fins comerciais quanto não comerciais, desde que mantidos os avisos originais de direitos autorais e as condições estipuladas na licença.
+
+Para detalhes completos sobre concessão de patentes, isenção de garantias e limitações de responsabilidade, consulte os arquivos [LICENSE](LICENSE) e [NOTICE](NOTICE).
+
+```text
+Copyright 2026 Airton Neto
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```

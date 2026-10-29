@@ -1,223 +1,210 @@
 # Reusable AI Backend Architecture
 
-Plataforma corporativa desacoplada e reutilizável para aplicações de Inteligência Artificial moderna, orquestração de agentes e gateways HTTP de alto desempenho.
+Plataforma corporativa desacoplada e reutilizável para aplicações de Inteligência Artificial moderna, orquestração de agentes autônomos e gateways de inferência de alta confiabilidade.
+
+[![Python 3.13](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+[![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-336791.svg)](https://www.postgresql.org/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://www.docker.com/)
+[![Pytest](https://img.shields.io/badge/Tests-159%20passed-success.svg)](https://docs.pytest.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![pip-audit](https://img.shields.io/badge/Security-0%20vulnerabilities-brightgreen.svg)](https://pypi.org/project/pip-audit/)
+
+> 🌐 **English Version**: An equivalent English version of this documentation is available at [README.en.md](README.en.md).
 
 ---
 
-## 🇧🇷 Português
+## 1. Visão Geral Executiva
 
-### 1. Visão Geral
+O **Reusable AI Backend Architecture** é uma arquitetura de referência corporativa concebida para resolver os principais gargalos e riscos de segurança da indústria de Inteligência Artificial: **acoplamento proprietário de SDKs**, **estouro orçamentário descontrolado de tokens**, **falhas em cascata de provedores instáveis** e **vulnerabilidades de borda (DOM XSS, IDOR e injeção de credenciais)**.
 
-O **Reusable AI Backend Architecture** não é um mero *wrapper* de chamadas HTTP. É uma arquitetura de nível corporativo projetada segundo os princípios de **Clean Architecture**, **Arquitetura Hexagonal (Portas e Adaptadores)**, **SOLID** e **Monólito Modular**, composta por dois módulos principais:
+Construído sob os princípios de **Clean Architecture**, **Arquitetura Hexagonal (Portas e Adaptadores)**, **SOLID** e **Monólito Modular**, o projeto é composto por dois módulos principais:
 
-1. **`AI Core`** (`packages/ai-core`):
-   - Núcleo de domínio e biblioteca Python independente de HTTP, transportes ou SDKs externos.
-   - Contratos agnósticos para LLMs (`PortaProvedorLLM`), ferramentas (`PortaExecutorFerramentas`), memória (`PortaRepositorioMemoria`) e observabilidade (`PortaObservabilidade`).
-   - Adaptadores concretos para **Ollama**, **Google Gemini**, **OpenAI**, **DeepSeek**, **Anthropic** e **Simulado (Fake/Mock)**.
-   - Persistência conversacional assíncrona em **PostgreSQL** (com pool de conexões e migrações versionadas), **SQLite (modo WAL)** e volátil em memória, com **isolamento multilocatário por usuário** e proteção contra IDOR.
-   - Validador seguro de **JSON Schema** com suporte a referências locais (`$defs`, `$ref`), `enum`, limites numéricos e de strings.
-   - Políticas completas de confiabilidade: **Disjuntor (Circuit Breaker)**, **Retentativas com Backoff Exponencial e Jitter**, **Limitador de Taxa (Token Bucket)**, **Semáforo de Concorrência**, **Protocolo de Reserva de Tokens em Duas Fases** (prevenção contra race condition TOCTOU e cancelamento em falhas) e **Fallback Controlado**.
-   - Runtime e orquestração de **Agentes Autônomos (Padrão ReAct)** com salvaguardas contra loops infinitos e controle rigoroso de permissões de ferramentas.
-   - Camada de **Observabilidade e Métricas**: instrumentação nativa Prometheus (`MetricasPrometheus`), rastreamento distribuído OpenTelemetry (`GerenciadorRastreamento`) com W3C `traceparent` e logs estruturados em JSON com mascaramento automático de credenciais (`FormatadorLogJson`).
+1. **`AI Core` (`packages/ai-core`)**:
+   - Biblioteca Python de domínio puro, desacoplada de frameworks HTTP e SDKs proprietários.
+   - Contratos abstratos agnósticos (`PortaProvedorLLM`, `PortaRepositorioMemoria`, `PortaExecutorFerramentas`, `PortaObservabilidade`).
+   - Adaptadores concretos para **Simulado (Mock)**, **Ollama (local)**, **OpenAI**, **Google Gemini**, **Anthropic** e **DeepSeek** (com código estruturado e verificado via `MockTransport`; integração ativa em produção exige credenciais fornecidas pelo operador).
+   - Persistência conversacional assíncrona em **PostgreSQL 17** (com pool `asyncpg` e migrações versionadas) e **SQLite (modo WAL)** com **isolamento multilocatário e proteção anti-IDOR**.
+   - Validador rigoroso de **JSON Schema** com suporte a referências locais (`$defs`, `$ref`) e autorreparo sintático.
+   - Suite de resiliência: **Disjuntor (*Circuit Breaker*)**, **Retentativas com Backoff Exponencial e Jitter**, **Protocolo de Reserva de Tokens em Duas Fases** (prevenção contra estouro de cota por requisições concorrentes TOCTOU) e **Fallback Controlado**.
+   - Runtime de **Agentes Autônomos (Padrão ReAct)** com limites de passos, timeout e governança de autorização de ferramentas.
 
-2. **`AI Gateway`** (`services/ai-gateway`):
+2. **`AI Gateway` (`services/ai-gateway`)**:
    - Serviço HTTP/REST/SSE desenvolvido sobre **FastAPI**.
-   - Endpoints com validação Pydantic e defesas contra DoS: `/health`, `/metrics` (Prometheus), `/v1/modelos`, `/v1/chat/conclusoes` (com streaming SSE), `/v1/chat/estruturado` (JSON Schema rigoroso com autorreparo) e `/v1/agentes/executar`.
-   - Middlewares globais para rastreamento (`X-Request-ID`, `X-Process-Time`, `traceparent`) e mapeamento de exceções de domínio para respostas padronizadas (RFC 7807).
-   - Autenticação e identificação multilocatário com **Proteção Anti-Spoofing** via `X-API-Key`, `Authorization: Bearer` e `X-User-ID` auditado.
-   - Ciclo de vida assíncrono com aplicação automática e idempotente de migrações do PostgreSQL no startup.
+   - Endpoints canônicos: `/health`, `/metrics` (Prometheus), `/v1/modelos`, `/v1/chat/conclusoes` (síncrono e streaming SSE com cancelamento seguro), `/v1/chat/estruturado`, `/v1/agentes/executar` e `/v1/conversas/{id_conversa}`.
+   - Middlewares defensivos de borda: injeção de cabeçalhos de segurança (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `HSTS` estrito).
+   - Autenticação de alta entropia e **Proteção Anti-Spoofing** via auditoria rigorosa de `X-User-ID`.
+   - Camada intermediária **BFF (Backend-For-Frontend)** para a aplicação piloto web com sessão assinada criptograficamente (HMAC-SHA256) e tokens anti-CSRF.
 
 ---
 
-### 2. Arquitetura
+## 2. Diagrama de Arquitetura
 
 ```mermaid
 flowchart TD
-    Cliente([Cliente HTTP / SPA / Mobile]) -->|REST / SSE| Gateway[AI Gateway - FastAPI]
+    Cliente([Cliente HTTP / SPA do Piloto / Mobile]) -->|REST / SSE na porta 8000| Gateway[AI Gateway - FastAPI]
     
     subgraph GatewayCamada ["AI Gateway (services/ai-gateway)"]
-        Rotas["Rotas (/v1/chat, /v1/chat/estruturado, /v1/modelos, /v1/agentes, /metrics)"]
-        AuthMiddleware["Middleware Anti-Spoofing e Identidade (X-User-ID)"]
-        RastreamentoMiddleware["Middleware Rastreamento (OpenTelemetry, Prometheus, Request-ID)"]
-        ErroMiddleware["Tratamento Global de Erros (RFC 7807)"]
-        Injecao["Injeção de Dependências"]
+        MidSec["Middleware de Borda: HSTS, CSP, Anti-Sniffing"]
+        MidTrace["Middleware Rastreamento: W3C traceparent, Request-ID, Latência"]
+        MidAuth["Validador de Autenticação e Anti-Spoofing (X-User-ID)"]
+        Rotas["Rotas (/v1/chat, /v1/agentes, /v1/conversas, /piloto, /metrics)"]
+        BFF["Camada Intermediária BFF (Sessão HMAC e Anti-CSRF)"]
     end
-    
-    Gateway --> RastreamentoMiddleware
-    RastreamentoMiddleware --> AuthMiddleware
-    AuthMiddleware --> Rotas
-    Rotas --> Injecao
+
+    Gateway --> MidSec --> MidTrace --> MidAuth --> Rotas
+    Rotas --> BFF
     
     subgraph CoreCamada ["AI Core (packages/ai-core)"]
-        CasosUso["Casos de Uso (GerarResposta, GerarFluxo, GerarSaidaEstruturada)"]
-        Roteador["Roteador de Modelos com Contingência Fallback"]
+        CasosUso["Casos de Uso (GerarResposta, GerarFluxo SSE, SaidaEstruturada)"]
         Resiliencia["Resiliência (Disjuntor, Retentativa, Token Bucket, Reserva 2-Fases)"]
-        Orquestrador["Orquestrador de Agentes (Ciclo ReAct)"]
-        RegFerramentas["RegistroFerramentas"]
-        Obs["Observabilidade (Prometheus, OpenTelemetry & Logs JSON)"]
+        Roteador["Roteador de Modelos com Contingência Fallback"]
+        Orquestrador["Orquestrador de Agentes (Ciclo Cognitivo ReAct)"]
+        ObsCore["Observabilidade (Prometheus, OpenTelemetry & Logs JSON)"]
     end
-    
-    Injecao --> CasosUso
-    Injecao --> Orquestrador
-    CasosUso --> Roteador
-    CasosUso --> Resiliencia
-    CasosUso --> Obs
+
+    Rotas --> CasosUso & Orquestrador
+    CasosUso --> Resiliencia --> Roteador
     Orquestrador --> Roteador
-    Orquestrador --> RegFerramentas
-    Orquestrador --> Obs
+    CasosUso --> ObsCore
+    Orquestrador --> ObsCore
     
     subgraph AdaptadoresCamada ["Adaptadores de Infraestrutura"]
-        Provedores["Provedores LLM (OpenAI, Gemini, Anthropic, Ollama, DeepSeek)"]
-        Postgres["MemoriaPostgresql (Pool asyncpg & Migrações)"]
+        Provedores["Adaptadores LLM (Simulado, Ollama, OpenAI, Gemini, Claude, DeepSeek)"]
+        Postgres["MemoriaPostgresql (PostgreSQL 17 Alpine + Pool asyncpg)"]
         SQLite["MemoriaSQLite (Modo WAL Concorrente)"]
-        Prometheus["Prometheus Server / Scraper"]
+        Prometheus["Prometheus Scraper (/metrics)"]
     end
-    
+
     Roteador --> Provedores
-    CasosUso --> Postgres
-    CasosUso --> SQLite
-    Obs --> Prometheus
+    CasosUso --> Postgres & SQLite
+    ObsCore --> Prometheus
 ```
 
 ---
 
-### 3. Execução Rápida
+## 3. Demonstração Prática: Aplicação Piloto (BFF)
 
-#### Opção A: Infraestrutura Local Completa com Docker Compose (Recomendada)
-
-```bash
-# 1. Copiar o arquivo de exemplo de ambiente
-cp .env.example .env
-
-# 2. Iniciar o stack básico (AI Gateway + PostgreSQL 17) em segundo plano
-docker compose up -d
-
-# 3. Verificar o status e healthchecks dos serviços
-docker compose ps
-
-# 4. Acessar endpoint de métricas Prometheus
-curl http://localhost:8000/metrics
-
-# 5. Encerrar os serviços preservando os volumes de dados
-docker compose down
-```
-
-Para mais detalhes sobre volumes, variáveis e portas, consulte o [Guia de Infraestrutura](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/infraestrutura.md) e o [Guia de Observabilidade](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/observabilidade.md).
-
-#### Opção B: Desenvolvimento Nativo com uv
-
-```bash
-# 1. Sincronizar workspace e dependências
-uv sync --all-packages
-
-# 2. Executar suíte completa de testes automatizados (109 cenários)
-uv run pytest -v
-
-# 3. Executar verificações de linter e formatação estrita
-uv run ruff check .
-uv run ruff format --check .
-
-# 4. Iniciar o AI Gateway em desenvolvimento
-uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
----
-
-### 4. Observabilidade e Monitoramento
-
-A plataforma disponibiliza três pilares integrados de telemetria corporativa:
-1. **Métricas Prometheus (`GET /metrics`)**: Contadores de requisições, histogramas de latência HTTP e inferência LLM, tokens faturados (entrada/saída), transições de circuitos de resiliência (`disjuntor_estado`), passos cognitivos de agentes e latências de banco. Protegido opcionalmente por `METRICAS_TOKEN`.
-2. **OpenTelemetry Distribuído**: Rastreamento com geração de spans em requisições, casos de uso e agentes, injeção do cabeçalho oficial W3C `traceparent` e sanitização estrita contra vazamento de prompts ou chaves.
-3. **Logs Estruturados JSON**: Ingestão corporativa com `FormatadorLogJson`, correlacionando `trace_id`, `span_id` e `request_id` em tempo real com mascaramento automático de credenciais.
-
-Para detalhes completos e exemplos de integração com Prometheus e Grafana, consulte [docs/observabilidade.md](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/observabilidade.md) e a [ADR 0009](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0009-observabilidade-prometheus-opentelemetry-e-rastreamento-distribuido.md).
-
----
-
-
----
-
-### 5. Aplicação Piloto e Interface de Referência (BFF)
-
-A arquitetura inclui uma aplicação piloto interativa e responsiva servida diretamente pelo AI Gateway em:
-`	ext
+A arquitetura inclui uma aplicação piloto responsiva servida diretamente pelo AI Gateway em:
+```text
 http://localhost:8000/piloto
-`
-
-Principais recursos demonstrados:
-- **Zero Frameworks Pesados**: Implementada em HTML5, CSS3 moderno e Vanilla JavaScript (SPA nativa, sem Node.js/npm).
-- **Camada Intermediária Segura (BFF)**: O navegador nunca recebe ou manipula chaves mestras (GATEWAY_API_KEY) ou strings de conexão SQL.
-- **Persistência Relacional**: Diálogo mantido e recuperado do **PostgreSQL 17**, resistindo a reinicializações.
-- **Multilocatário e Anti-IDOR**: Alternador de perfis (usuario_alfa e usuario_beta) que comprova o bloqueio relacional com 403 Forbidden.
-- **Telemetria Visível**: Exibição em tempo real do X-Request-ID, tempo de latência, contagem de tokens e atalho para /metrics.
-
-Para instruções completas e cenários de teste, consulte o [docs/aplicacao_piloto.md](docs/aplicacao_piloto.md) e a [ADR 0010](docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md).
-
-## 🇺🇸 English
-
-### 1. Overview
-
-**Reusable AI Backend Architecture** is a production-grade, enterprise backend platform for Artificial Intelligence applications. Designed around **Clean Architecture**, **Hexagonal Architecture (Ports and Adapters)**, **SOLID**, and **Modular Monolith** principles, it consists of two distinct components:
-
-1. **`AI Core`** (`packages/ai-core`):
-   - Transport-agnostic Python domain library decoupled from HTTP frameworks and provider SDKs.
-   - Pure domain abstractions for LLM providers (`PortaProvedorLLM`), tool execution (`PortaExecutorFerramentas`), conversational memory (`PortaRepositorioMemoria`), and observability (`PortaObservabilidade`).
-   - Production adapters for **Ollama**, **Google Gemini**, **OpenAI**, **DeepSeek**, **Anthropic**, and **Mock/Simulated**.
-   - Asynchronous **PostgreSQL memory (with connection pool & versioned migrations)**, **SQLite (WAL mode)**, and in-memory storage, featuring **multi-tenant user isolation** and IDOR protection.
-   - Resilient **JSON Schema validator** supporting `$defs`, `$ref`, `enum`, min/max constraints, and safe metadata keywords.
-   - Full resilience suite: **Circuit Breaker**, **Exponential Backoff Retries with Jitter**, **Token Bucket Rate Limiter**, **Concurrency Semaphore**, **Two-Phase Token Reservation Protocol** (preventing TOCTOU race conditions and cancellation rollbacks), and **Configured Fallback Routing**.
-   - **Autonomous Agent Runtime (ReAct pattern)** with loop protection and permission-based tool security.
-   - **Observability Layer**: Native Prometheus metrics (`MetricasPrometheus`), OpenTelemetry distributed tracing (`GerenciadorRastreamento`) with W3C `traceparent`, and structured JSON logging with automated credential redaction (`FormatadorLogJson`).
-
-2. **`AI Gateway`** (`services/ai-gateway`):
-   - Fast and reliable HTTP/REST/SSE service built with **FastAPI**.
-   - Endpoints: `/health`, `/metrics` (Prometheus), `/v1/modelos` (catalog), `/v1/chat/conclusoes` (synchronous & SSE streaming), `/v1/chat/estruturado` (JSON Schema with auto-repair), and `/v1/agentes/executar`.
-   - Global tracking middleware (`X-Request-ID`, `X-Process-Time`, `traceparent`) and RFC 7807 problem detail handlers.
-   - Multi-tenant authentication with **Anti-Spoofing Security** (`X-API-Key`, `Authorization: Bearer`, audited `X-User-ID`).
-   - Asynchronous lifecycle management with automated idempotent PostgreSQL migrations on startup.
-
-### 2. Infrastructure & Local Orchestration
-
-The platform provides a production-hardened local environment orchestrated with **Docker Compose**:
-- **Multi-Stage Dockerfile**: Fast builds using `uv`, producing minimal runtime images based on `python:3.13-slim` running under non-root user `appuser` (UID `10001`).
-- **PostgreSQL 17 Alpine**: Isolated database service with persistent volume (`ia_dados_postgresql`), healthchecks, and internal bridge network (`ia_rede_interna`).
-- **Ollama**: Optional local model inference service activated via profile (`--profile ollama`).
-- **Observability Endpoint**: Ready for Prometheus scraping on `/metrics` with low-cardinality label guarantees and optional bearer token protection.
-
-```bash
-# 1. Prepare environment file
-cp .env.example .env
-
-# 2. Run core stack (AI Gateway + PostgreSQL 17)
-docker compose up -d
-
-# 3. Check health and services status
-docker compose ps
-
-# 4. Scrape metrics
-curl http://localhost:8000/metrics
-
-# 5. Tear down services (preserving volumes)
-docker compose down
 ```
 
-For complete technical specifications, see [docs/infraestrutura.md](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/infraestrutura.md), [docs/observabilidade.md](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/observabilidade.md), [ADR 0008](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md), and [ADR 0009](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0009-observabilidade-prometheus-opentelemetry-e-rastreamento-distribuido.md).
+Principais capacidades demonstradas na prática com **custo financeiro zero**:
+- **Interface SPA Leve**: Construída em HTML5, CSS3 moderno e Vanilla JavaScript (sem dependências de Node.js/npm e com JavaScript externalizado em `/piloto/app.js` para conformidade com CSP).
+- **Camada Intermediária Segura (BFF)**: O navegador nunca manipula chaves mestras nem credenciais SQL. Toda comunicação com o backend ocorre através de cookies de sessão assinados com HMAC-SHA256 (`piloto_sessao`) e tokens `X-CSRF-Token`.
+- **Persistência Relacional Real**: Diálogos mantidos no **PostgreSQL 17**, sobrevivendo à reinicialização de contêineres.
+- **Comprovação Anti-IDOR**: Alternador demonstrativo de perfis (`usuario_alfa` e `usuario_beta`), comprovando que o acesso cruzado ao histórico de outro usuário é bloqueado relacionalmente com **HTTP 403 Forbidden**.
+- **Telemetria Visível**: Exibição em tempo real de `X-Request-ID`, tempo de latência em milissegundos e contagem real de tokens processados.
 
 ---
 
-### 3. Pilot Application & Reference UI (BFF)
+## 4. Guia de Início Rápido (Comandos Verificados)
 
-An interactive, responsive pilot application is served directly by the AI Gateway at:
-`	ext
-http://localhost:8000/piloto
-`
+### Opção A: Execução Conteinerizada via Docker Compose (Recomendada)
 
-Key features demonstrated:
-- **Lightweight Architecture**: Single Page Application built with HTML5, modern CSS, and Vanilla JavaScript with zero Node/npm overhead.
-- **Secure Backend-For-Frontend (BFF)**: Browser never receives master API keys or database connection strings.
-- **Relational Memory**: Chat continuity backed by **PostgreSQL 17**, surviving service restarts.
-- **Multi-Tenant IDOR Prevention**: Switch between usuario_alfa and usuario_beta to verify tenant isolation and access controls.
-- **Diagnostic Telemetry**: Displays X-Request-ID, latency (ms), token usage, and quick links to /metrics.
+1. **Copiar o arquivo de exemplo de ambiente**:
+   ```bash
+   cp .env.example .env
+   ```
+2. **Iniciar os serviços centrais (AI Gateway + PostgreSQL 17)**:
+   ```bash
+   docker compose up -d
+   ```
+3. **Verificar o status dos serviços e das sondas de saúde (healthchecks)**:
+   ```bash
+   docker compose ps
+   ```
+   *Ambos os contêineres (`ia-gateway` e `ia-postgres`) devem apresentar status `healthy`.*
+4. **Validar a API e inspecionar métricas**:
+   ```bash
+   # Teste de vivacidade do Gateway
+   curl http://localhost:8000/health
 
-For full documentation, see [docs/aplicacao_piloto.md](docs/aplicacao_piloto.md) and [ADR 0010](docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md).
+   # Teste de métricas Prometheus autenticadas
+   curl -H "Authorization: Bearer dev-metrics-token-12345678" http://localhost:8000/metrics
+   ```
+5. **Acessar a interface web**:
+   Abra seu navegador em [http://localhost:8000/piloto](http://localhost:8000/piloto).
+6. **Encerrar a execução preservando os dados**:
+   ```bash
+   docker compose down
+   ```
 
+---
+
+### Opção B: Execução Nativa Bare-Metal com `uv`
+
+1. **Sincronizar dependências do monorrepositório**:
+   ```bash
+   uv sync --all-packages
+   ```
+2. **Executar a suíte completa de testes automatizados**:
+   ```bash
+   uv run pytest -v
+   ```
+3. **Validar linter e formatação estrita**:
+   ```bash
+   uv run ruff check .
+   uv run ruff format --check .
+   ```
+4. **Auditar vulnerabilidades de dependências (SCA)**:
+   ```bash
+   uv run --with pip-audit pip-audit
+   ```
+5. **Iniciar o servidor de desenvolvimento**:
+   ```bash
+   uv run uvicorn ai_gateway.main:app --host 0.0.0.0 --port 8000 --reload
+   ```
+
+---
+
+## 5. Garantia de Qualidade, Testes e CI
+
+A confiabilidade da base de código é validada por **159 testes automatizados determinísticos** e integração contínua rigorosa:
+
+- **Bateria Pytest**:
+  - **155 testes aprovados** localmente em modo unitário/isolado.
+  - **4 testes de integração física** com o banco PostgreSQL 17 real (executados com contêiner descartável).
+  - **159 testes aprovados (100% de taxa de aprovação dos testes coletados)** na esteira de CI do GitHub Actions com PostgreSQL 17 real como serviço (esta métrica comprova o sucesso funcional de todos os cenários especificados e não deve ser confundida com cobertura total de código por linhas/ramos via pytest-cov).
+- **Análise Estática e Linter**: 100% aprovado pelo `ruff` sem alertas.
+- **Segurança da Cadeia de Suprimentos (SCA)**: `pip-audit` executado no CI com **0 vulnerabilidades conhecidas**.
+- **Higiene Docker**: `.dockerignore` configurado para impedir o envio acidental de arquivos de auditoria ou testes para o contêiner de produção.
+
+---
+
+## 6. Limitações e Escopo Operacional
+
+1. **Controle Orçamentário em Processo Local**:
+   - A `PoliticaOrcamentoTokens` e o `LimitadorTaxa` utilizam locks em memória volátil (`asyncio.Lock()`). Em implantações horizontais com múltiplos contêineres/pods ou múltiplos workers, as quotas são aplicadas por processo, não garantindo teto consolidado sem um coordenador de estado distribuído (ex: Redis).
+2. **Terminação TLS e Reverse Proxies de Borda**:
+   - Para prevenir *HSTS Spoofing* (RFC 6797 Sec 7.2), o Gateway não confia cegamente no cabeçalho `X-Forwarded-Proto` de clientes diretos. Em topologias corporativas atrás de balanceadores/proxies (Cloudflare, AWS ALB, Nginx), o servidor Uvicorn deve ser configurado com `--proxy-headers` e `--forwarded-allow-ips`.
+3. **Escopo dos Testes e Auditoria**:
+   - A qualidade é comprovada por testes determinísticos, testes de integração real com banco e revisão estática estrutural orientada pela Cloudflare Security Audit Skill. Não constitui certificação formal de segurança (ex: ISO 27001 ou SOC 2) nem substitui testes dinâmicos de intrusão (*penetration test* ou DAST) e testes de estresse em ambiente de homologação dedicado.
+
+---
+
+## 7. Documentação Especializada e Caderno Técnico
+
+Explore os guias detalhados no diretório [`docs/`](docs/):
+
+- 📐 [Documentação de Arquitetura e Modelos C4](docs/arquitetura.md)
+- 🐳 [Guia de Infraestrutura, Docker e Execução Bare-Metal](docs/infraestrutura.md)
+- 🛡️ [Guia de Segurança, AppSec e Remediação Conclusiva](docs/seguranca.md)
+- 📡 [Contratos de API, Rotas REST, Streaming e BFF](docs/contratos_api.md)
+- 🧪 [Estratégia de Testes Automatizados e CI](docs/estrategia_testes.md)
+- 🖥️ [Guia da Aplicação Piloto e Camada Intermediária](docs/aplicacao_piloto.md)
+- 📊 [Observabilidade, Métricas Prometheus e Tracing OpenTelemetry](docs/observabilidade.md)
+- 📚 [Caderno Técnico nos Sete Pilares da Engenharia](docs/caderno_tecnico.md)
+- 📜 [Registros de Decisão de Arquitetura (ADRs 0001 a 0011)](docs/adr/)
+
+---
+
+## 8. Transparência sobre o Desenvolvimento Assistido por IA
+
+Este projeto foi construído na fronteira da **Engenharia de Software Assistida por Inteligência Artificial**. 
+
+- **Engenharia e Liderança Humana (Airton Neto)**: Concepção dos requisitos de negócio, definição da Clean Architecture, imposição das regras de governança e nomenclatura em português culto (`AGENTS.md`), code review rigoroso, detecção de falhas sutis de concorrência e autorização das decisões de merge.
+- **Implementação por Agentes Autônomos de IA (Antigravity)**: Geração do scaffolding de código, implementação dos adaptadores, redação de 159 testes unitários/integração e execução do roteiro de auditoria estática com a Cloudflare Security Audit Skill.
+
+Para uma análise detalhada sobre o modelo de parceria humano-IA, consulte o **Pilar 7** do [Caderno Técnico](docs/caderno_tecnico.md).

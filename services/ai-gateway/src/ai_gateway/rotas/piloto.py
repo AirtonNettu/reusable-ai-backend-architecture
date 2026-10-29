@@ -44,12 +44,15 @@ TTL_SESSAO_SEGUNDOS: int = 86400  # 24 horas
 
 
 def obter_segredo_piloto(config: ConfiguracoesGateway) -> str:
-    """Retorna o segredo para assinatura HMAC da sessão do piloto."""
-    return (
-        config.piloto_segredo_sessao
-        or config.chave_api_mestre
-        or "segredo-sessao-piloto-desenvolvimento-local-32chars"
-    )
+    """Retorna o segredo para assinatura HMAC da sessão do piloto com fail-closed estrito (SEC-004)."""
+    if config.piloto_segredo_sessao:
+        return config.piloto_segredo_sessao
+    if config.e_producao:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro de configuração de segurança: 'GATEWAY_PILOTO_SEGREDO_SESSAO' não configurado.",
+        )
+    return "segredo-sessao-piloto-desenvolvimento-local-32chars"
 
 
 def calcular_hmac_sessao(id_usuario: str, timestamp: int, segredo: str) -> str:
@@ -437,6 +440,250 @@ async def recuperar_historico_piloto(
 # Interface Gráfica Responsiva (Single Page Application)
 # ------------------------------------------------------------------------------
 
+JAVASCRIPT_SPA_PILOTO: str = """
+    let usuarioAtual = 'usuario_alfa';
+    let idConversaAtual = 'conv-piloto-01';
+    let csrfTokenAtual = '';
+
+    // Inicialização e vinculação de eventos sem inline handlers (SEC-009)
+    document.addEventListener('DOMContentLoaded', async () => {
+      document.getElementById('btn-enviar')?.addEventListener('click', enviarMensagem);
+      document.getElementById('campo-mensagem')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') enviarMensagem();
+      });
+      document.getElementById('seletor-usuario')?.addEventListener('change', alternarUsuario);
+      document.getElementById('btn-nova-conversa')?.addEventListener('click', gerarNovaConversa);
+      document.getElementById('btn-recarregar-historico')?.addEventListener('click', carregarHistoricoDoBanco);
+      document.querySelectorAll('.chip-sugestao').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const s = btn.getAttribute('data-sugestao');
+          if (s) usarSugestao(s);
+        });
+      });
+
+      await sincronizarSessao();
+      await carregarStatus();
+      await carregarHistoricoDoBanco();
+    });
+
+    async function sincronizarSessao() {
+      try {
+        const resp = await fetch('/piloto/api/sessao');
+        if (resp.ok) {
+          const dados = await resp.json();
+          usuarioAtual = dados.id_usuario;
+          csrfTokenAtual = dados.csrf_token || '';
+          document.getElementById('seletor-usuario').value = usuarioAtual;
+          atualizarLabelsUsuario();
+        }
+      } catch (err) {
+        console.warn('Falha ao sincronizar sessão inicial:', err);
+      }
+    }
+
+    async function alternarUsuario() {
+      const novoUsuario = document.getElementById('seletor-usuario').value;
+      try {
+        const resp = await fetch('/piloto/api/sessao', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfTokenAtual
+          },
+          body: JSON.stringify({ id_usuario: novoUsuario, csrf_token: csrfTokenAtual })
+        });
+        if (resp.ok) {
+          const dados = await resp.json();
+          usuarioAtual = dados.id_usuario;
+          csrfTokenAtual = dados.csrf_token || csrfTokenAtual;
+          atualizarLabelsUsuario();
+          await carregarHistoricoDoBanco();
+        } else {
+          const err = await resp.json();
+          mostrarErro(`Falha ao alternar usuário (${resp.status}): ${err.detail || 'Operação negada'}`);
+        }
+      } catch (err) {
+        mostrarErro('Falha ao alternar usuário: ' + err.message);
+      }
+    }
+
+    function atualizarLabelsUsuario() {
+      document.getElementById('subtitulo-conversa-header').textContent = `Sessão ativa como: ${usuarioAtual}`;
+      document.getElementById('telemetria-usuario').textContent = usuarioAtual;
+    }
+
+    async function carregarStatus() {
+      try {
+        const resp = await fetch('/piloto/api/status');
+        if (resp.ok) {
+          const s = await resp.json();
+          document.getElementById('txt-banco').textContent = s.memoria_tipo.toUpperCase() + ' 17';
+        }
+      } catch (e) {
+        console.error('Falha ao obter status do piloto', e);
+      }
+    }
+
+    function gerarNovaConversa() {
+      const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+      idConversaAtual = `conv-${timestamp}`;
+      document.getElementById('input-id-conversa').value = idConversaAtual;
+      document.getElementById('titulo-conversa-header').textContent = `Conversa: ${idConversaAtual}`;
+      
+      // Limpa a tela mantendo apenas a mensagem de boas-vindas
+      const painel = document.getElementById('painel-mensagens');
+      painel.innerHTML = `
+        <div class="mensagem assistente">
+          <div class="mensagem-autor">🤖 Assistente Simulado • Nova Conversa</div>
+          <div class="mensagem-bolha">Nova sessão iniciada: <b>${escapeHtml(idConversaAtual)}</b>.<br>Envie sua mensagem para persistir neste novo tópico do PostgreSQL.</div>
+        </div>
+      `;
+      ocultarErro();
+    }
+
+    async function carregarHistoricoDoBanco() {
+      idConversaAtual = document.getElementById('input-id-conversa').value.trim() || 'conv-piloto-01';
+      document.getElementById('titulo-conversa-header').textContent = `Conversa: ${idConversaAtual}`;
+      ocultarErro();
+
+      try {
+        const resp = await fetch(`/piloto/api/conversas/${encodeURIComponent(idConversaAtual)}`);
+        if (!resp.ok) {
+          if (resp.status === 403) {
+            mostrarErro(`🔒 Acesso Negado (403 Forbidden): A conversa '${idConversaAtual}' pertence a outro usuário. O isolamento multilocatário e a proteção contra IDOR do PostgreSQL impedem o acesso por '${usuarioAtual}'.`);
+          } else {
+            const errJson = await resp.json();
+            mostrarErro(`Erro ao carregar histórico: ${errJson.detail || resp.statusText}`);
+          }
+          return;
+        }
+
+        const dados = await resp.json();
+        const painel = document.getElementById('painel-mensagens');
+        painel.innerHTML = '';
+
+        if (dados.mensagens.length === 0) {
+          painel.innerHTML = `
+            <div class="mensagem assistente">
+              <div class="mensagem-autor">🤖 Sistema • Histórico Vazio</div>
+              <div class="mensagem-bolha">Nenhuma mensagem gravada ainda para a conversa <b>${escapeHtml(idConversaAtual)}</b> sob o usuário <b>${escapeHtml(usuarioAtual)}</b>. Envie a primeira mensagem abaixo!</div>
+            </div>
+          `;
+          return;
+        }
+
+        dados.mensagens.forEach(m => {
+          adicionarMensagemNaTela(m.papel, m.conteudo, false);
+        });
+
+      } catch (err) {
+        mostrarErro('Falha de conexão ao recuperar histórico: ' + err.message);
+      }
+    }
+
+    function tratarEnter(e) {
+      if (e.key === 'Enter') {
+        enviarMensagem();
+      }
+    }
+
+    function usarSugestao(texto) {
+      const campo = document.getElementById('campo-mensagem');
+      campo.value = texto;
+      campo.focus();
+    }
+
+    async function enviarMensagem() {
+      const campo = document.getElementById('campo-mensagem');
+      const texto = campo.value.trim();
+      idConversaAtual = document.getElementById('input-id-conversa').value.trim() || 'conv-piloto-01';
+
+      if (!texto) return;
+
+      campo.value = '';
+      ocultarErro();
+      adicionarMensagemNaTela('usuario', texto);
+
+      const indicador = document.getElementById('indicador-carregamento');
+      const btnEnviar = document.getElementById('btn-enviar');
+      indicador.style.display = 'flex';
+      btnEnviar.disabled = true;
+
+      try {
+        const resp = await fetch('/piloto/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfTokenAtual
+          },
+          body: JSON.stringify({
+            mensagem: texto,
+            id_conversa: idConversaAtual,
+            modelo: 'modelo-teste'
+          })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          mostrarErro(`Falha na requisição (${resp.status}): ${err.detail || 'Erro desconhecido'}`);
+          return;
+        }
+
+        const dados = await resp.json();
+        adicionarMensagemNaTela('assistente', dados.resposta);
+
+        // Atualiza painel de telemetria
+        document.getElementById('telemetria-request-id').textContent = dados.request_id || '-';
+        document.getElementById('telemetria-tempo').textContent = `${dados.duracao_ms} ms`;
+        if (dados.tokens) {
+          document.getElementById('telemetria-tokens').textContent = 
+            `${dados.tokens.tokens_entrada} / ${dados.tokens.tokens_saida} / ${dados.tokens.total_tokens}`;
+        }
+      } catch (err) {
+        mostrarErro('Erro de comunicação com o AI Gateway: ' + err.message);
+      } finally {
+        indicador.style.display = 'none';
+        btnEnviar.disabled = false;
+        campo.focus();
+      }
+    }
+
+    function adicionarMensagemNaTela(papel, conteudo, animar = true) {
+      const painel = document.getElementById('painel-mensagens');
+      const div = document.createElement('div');
+      div.className = `mensagem ${papel}`;
+      if (!animar) div.style.animation = 'none';
+
+      const autor = papel === 'usuario' ? `👤 ${usuarioAtual}` : '🤖 Assistente Simulado';
+      div.innerHTML = `
+        <div class="mensagem-autor">${escapeHtml(autor)}</div>
+        <div class="mensagem-bolha">${escapeHtml(conteudo)}</div>
+      `;
+
+      painel.appendChild(div);
+      painel.scrollTop = painel.scrollHeight;
+    }
+
+    function mostrarErro(msg) {
+      const banner = document.getElementById('banner-alerta');
+      banner.textContent = msg;
+      banner.style.display = 'block';
+    }
+
+    function ocultarErro() {
+      const banner = document.getElementById('banner-alerta');
+      banner.style.display = 'none';
+      banner.textContent = '';
+    }
+
+    function escapeHtml(texto) {
+      if (texto === null || texto === undefined) return '';
+      const div = document.createElement('div');
+      div.textContent = String(texto);
+      return div.innerHTML;
+    }
+"""
+
 HTML_PAGINA_PILOTO = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -817,7 +1064,7 @@ HTML_PAGINA_PILOTO = """<!DOCTYPE html>
       <div class="secao-titulo">Sessão e Identidade (Multilocatário)</div>
       <div class="cartao-lateral">
         <label for="seletor-usuario" style="font-size:0.75rem; color:var(--texto-secundario);">Usuário Ativo (X-User-ID):</label>
-        <select id="seletor-usuario" onchange="alternarUsuario()">
+        <select id="seletor-usuario">
           <option value="usuario_alfa">usuario_alfa (Locatário A)</option>
           <option value="usuario_beta">usuario_beta (Locatário B)</option>
         </select>
@@ -834,8 +1081,8 @@ HTML_PAGINA_PILOTO = """<!DOCTYPE html>
         <label for="input-id-conversa" style="font-size:0.75rem; color:var(--texto-secundario);">ID da Conversa (PostgreSQL):</label>
         <input type="text" id="input-id-conversa" value="conv-piloto-01" spellcheck="false" />
         <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
-          <button class="btn btn-secundario" style="flex:1;" onclick="gerarNovaConversa()">Nova</button>
-          <button class="btn btn-secundario" style="flex:1;" onclick="carregarHistoricoDoBanco()">Recarregar</button>
+          <button class="btn btn-secundario" style="flex:1;" id="btn-nova-conversa">Nova</button>
+          <button class="btn btn-secundario" style="flex:1;" id="btn-recarregar-historico">Recarregar</button>
         </div>
       </div>
     </div>
@@ -888,21 +1135,21 @@ Envie uma mensagem abaixo para experimentar o envio, a resposta do adaptador sim
 
     <!-- Sugestões Rápidas -->
     <div class="sugestoes">
-      <button class="chip-sugestao" onclick="usarSugestao('Mensagem 1: Olá! Por favor, confirme a saúde e o status do sistema.')">
+      <button class="chip-sugestao" data-sugestao="Mensagem 1: Olá! Por favor, confirme a saúde e o status do sistema.">
         1ª Requisição: Status do Sistema
       </button>
-      <button class="chip-sugestao" onclick="usarSugestao('Mensagem 2: Verifique que o histórico desta conversa foi recuperado do PostgreSQL.')">
+      <button class="chip-sugestao" data-sugestao="Mensagem 2: Verifique que o histórico desta conversa foi recuperado do PostgreSQL.">
         2ª Requisição: Memória no PostgreSQL
       </button>
-      <button class="chip-sugestao" onclick="usarSugestao('Qual o modelo ativo e o ambiente de execução?')">
+      <button class="chip-sugestao" data-sugestao="Qual o modelo ativo e o ambiente de execução?">
         Modelo e Ambiente
       </button>
     </div>
 
     <!-- Barra de Input -->
     <div class="input-container">
-      <input type="text" id="campo-mensagem" placeholder="Digite sua mensagem para o AI Gateway..." onkeydown="tratarEnter(event)" />
-      <button class="btn" id="btn-enviar" onclick="enviarMensagem()">
+      <input type="text" id="campo-mensagem" placeholder="Digite sua mensagem para o AI Gateway..." />
+      <button class="btn" id="btn-enviar">
         <span>Enviar</span> ➤
       </button>
     </div>
@@ -928,233 +1175,7 @@ Envie uma mensagem abaixo para experimentar o envio, a resposta do adaptador sim
     </div>
   </main>
 
-  <script>
-    let usuarioAtual = 'usuario_alfa';
-    let idConversaAtual = 'conv-piloto-01';
-    let csrfTokenAtual = '';
-
-    // Inicialização
-    document.addEventListener('DOMContentLoaded', async () => {
-      await sincronizarSessao();
-      await carregarStatus();
-      await carregarHistoricoDoBanco();
-    });
-
-    async function sincronizarSessao() {
-      try {
-        const resp = await fetch('/piloto/api/sessao');
-        if (resp.ok) {
-          const dados = await resp.json();
-          usuarioAtual = dados.id_usuario;
-          csrfTokenAtual = dados.csrf_token || '';
-          document.getElementById('seletor-usuario').value = usuarioAtual;
-          atualizarLabelsUsuario();
-        }
-      } catch (err) {
-        console.warn('Falha ao sincronizar sessão inicial:', err);
-      }
-    }
-
-    async function alternarUsuario() {
-      const novoUsuario = document.getElementById('seletor-usuario').value;
-      try {
-        const resp = await fetch('/piloto/api/sessao', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfTokenAtual
-          },
-          body: JSON.stringify({ id_usuario: novoUsuario, csrf_token: csrfTokenAtual })
-        });
-        if (resp.ok) {
-          const dados = await resp.json();
-          usuarioAtual = dados.id_usuario;
-          csrfTokenAtual = dados.csrf_token || csrfTokenAtual;
-          atualizarLabelsUsuario();
-          await carregarHistoricoDoBanco();
-        } else {
-          const err = await resp.json();
-          mostrarErro(`Falha ao alternar usuário (${resp.status}): ${err.detail || 'Operação negada'}`);
-        }
-      } catch (err) {
-        mostrarErro('Falha ao alternar usuário: ' + err.message);
-      }
-    }
-
-    function atualizarLabelsUsuario() {
-      document.getElementById('subtitulo-conversa-header').textContent = `Sessão ativa como: ${usuarioAtual}`;
-      document.getElementById('telemetria-usuario').textContent = usuarioAtual;
-    }
-
-    async function carregarStatus() {
-      try {
-        const resp = await fetch('/piloto/api/status');
-        if (resp.ok) {
-          const s = await resp.json();
-          document.getElementById('txt-banco').textContent = s.memoria_tipo.toUpperCase() + ' 17';
-        }
-      } catch (e) {
-        console.error('Falha ao obter status do piloto', e);
-      }
-    }
-
-    function gerarNovaConversa() {
-      const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-      idConversaAtual = `conv-${timestamp}`;
-      document.getElementById('input-id-conversa').value = idConversaAtual;
-      document.getElementById('titulo-conversa-header').textContent = `Conversa: ${idConversaAtual}`;
-      
-      // Limpa a tela mantendo apenas a mensagem de boas-vindas
-      const painel = document.getElementById('painel-mensagens');
-      painel.innerHTML = `
-        <div class="mensagem assistente">
-          <div class="mensagem-autor">🤖 Assistente Simulado • Nova Conversa</div>
-          <div class="mensagem-bolha">Nova sessão iniciada: <b>${idConversaAtual}</b>.<br>Envie sua mensagem para persistir neste novo tópico do PostgreSQL.</div>
-        </div>
-      `;
-      ocultarErro();
-    }
-
-    async function carregarHistoricoDoBanco() {
-      idConversaAtual = document.getElementById('input-id-conversa').value.trim() || 'conv-piloto-01';
-      document.getElementById('titulo-conversa-header').textContent = `Conversa: ${idConversaAtual}`;
-      ocultarErro();
-
-      try {
-        const resp = await fetch(`/piloto/api/conversas/${encodeURIComponent(idConversaAtual)}`);
-        if (!resp.ok) {
-          if (resp.status === 403) {
-            mostrarErro(`🔒 Acesso Negado (403 Forbidden): A conversa '${idConversaAtual}' pertence a outro usuário. O isolamento multilocatário e a proteção contra IDOR do PostgreSQL impedem o acesso por '${usuarioAtual}'.`);
-          } else {
-            const errJson = await resp.json();
-            mostrarErro(`Erro ao carregar histórico: ${errJson.detail || resp.statusText}`);
-          }
-          return;
-        }
-
-        const dados = await resp.json();
-        const painel = document.getElementById('painel-mensagens');
-        painel.innerHTML = '';
-
-        if (dados.mensagens.length === 0) {
-          painel.innerHTML = `
-            <div class="mensagem assistente">
-              <div class="mensagem-autor">🤖 Sistema • Histórico Vazio</div>
-              <div class="mensagem-bolha">Nenhuma mensagem gravada ainda para a conversa <b>${idConversaAtual}</b> sob o usuário <b>${usuarioAtual}</b>. Envie a primeira mensagem abaixo!</div>
-            </div>
-          `;
-          return;
-        }
-
-        dados.mensagens.forEach(m => {
-          adicionarMensagemNaTela(m.papel, m.conteudo, false);
-        });
-
-      } catch (err) {
-        mostrarErro('Falha de conexão ao recuperar histórico: ' + err.message);
-      }
-    }
-
-    function tratarEnter(e) {
-      if (e.key === 'Enter') {
-        enviarMensagem();
-      }
-    }
-
-    function usarSugestao(texto) {
-      document.getElementById('campo-mensagem').value = texto;
-      document.getElementById('campo-mensagem').focus();
-    }
-
-    async function enviarMensagem() {
-      const campo = document.getElementById('campo-mensagem');
-      const texto = campo.value.trim();
-      idConversaAtual = document.getElementById('input-id-conversa').value.trim() || 'conv-piloto-01';
-
-      if (!texto) return;
-
-      campo.value = '';
-      ocultarErro();
-      adicionarMensagemNaTela('usuario', texto);
-
-      const indicador = document.getElementById('indicador-carregamento');
-      const btnEnviar = document.getElementById('btn-enviar');
-      indicador.style.display = 'flex';
-      btnEnviar.disabled = true;
-
-      try {
-        const resp = await fetch('/piloto/api/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfTokenAtual
-          },
-          body: JSON.stringify({
-            mensagem: texto,
-            id_conversa: idConversaAtual,
-            modelo: 'modelo-teste'
-          })
-        });
-
-        if (!resp.ok) {
-          const err = await resp.json();
-          mostrarErro(`Falha na requisição (${resp.status}): ${err.detail || 'Erro desconhecido'}`);
-          return;
-        }
-
-        const dados = await resp.json();
-        adicionarMensagemNaTela('assistente', dados.resposta);
-
-        // Atualiza painel de telemetria
-        document.getElementById('telemetria-request-id').textContent = dados.request_id || '-';
-        document.getElementById('telemetria-tempo').textContent = `${dados.duracao_ms} ms`;
-        if (dados.tokens) {
-          document.getElementById('telemetria-tokens').textContent = 
-            `${dados.tokens.tokens_entrada} / ${dados.tokens.tokens_saida} / ${dados.tokens.total_tokens}`;
-        }
-      } catch (err) {
-        mostrarErro('Erro de comunicação com o AI Gateway: ' + err.message);
-      } finally {
-        indicador.style.display = 'none';
-        btnEnviar.disabled = false;
-        campo.focus();
-      }
-    }
-
-    function adicionarMensagemNaTela(papel, conteudo, animar = true) {
-      const painel = document.getElementById('painel-mensagens');
-      const div = document.createElement('div');
-      div.className = `mensagem ${papel}`;
-      if (!animar) div.style.animation = 'none';
-
-      const autor = papel === 'usuario' ? `👤 ${usuarioAtual}` : '🤖 Assistente Simulado';
-      div.innerHTML = `
-        <div class="mensagem-autor">${autor}</div>
-        <div class="mensagem-bolha">${escapeHtml(conteudo)}</div>
-      `;
-
-      painel.appendChild(div);
-      painel.scrollTop = painel.scrollHeight;
-    }
-
-    function mostrarErro(msg) {
-      const banner = document.getElementById('banner-alerta');
-      banner.textContent = msg;
-      banner.style.display = 'block';
-    }
-
-    function ocultarErro() {
-      const banner = document.getElementById('banner-alerta');
-      banner.style.display = 'none';
-      banner.textContent = '';
-    }
-
-    function escapeHtml(texto) {
-      const div = document.createElement('div');
-      div.textContent = texto;
-      return div.innerHTML;
-    }
-  </script>
+  <script src="/piloto/app.js"></script>
 </body>
 </html>
 """
@@ -1185,3 +1206,16 @@ async def carregar_pagina_piloto(
             config=config,
         )
     return resposta
+
+
+@roteador_piloto.get("/app.js", response_class=Response, include_in_schema=False)
+async def carregar_script_piloto(
+    config: Annotated[ConfiguracoesGateway, Depends(obter_configuracoes_requisicao)],
+) -> Response:
+    """Entrega o script client-side da SPA do piloto externamente para conformidade com CSP (SEC-009)."""
+    verificar_piloto_habilitado(config)
+    return Response(
+        content=JAVASCRIPT_SPA_PILOTO,
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )

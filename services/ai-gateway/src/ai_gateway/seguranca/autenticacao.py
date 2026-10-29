@@ -7,8 +7,8 @@ from typing import Self
 from fastapi import Header, HTTPException, Request, status
 
 from ai_gateway.configuracoes import (
-    CHAVES_DEMONSTRACAO_INSEGURAS,
     ConfiguracoesGateway,
+    eh_credencial_insegura_producao,
 )
 
 PADRAO_IDENTIFICADOR_SEGURO = re.compile(r"^[a-zA-Z0-9_\-\.:@]{1,128}$")
@@ -100,13 +100,10 @@ class ValidadorAutenticacao:
                 detail="Credencial ausente nos cabeçalhos X-API-Key ou Authorization.",
             )
 
-        # Em produção, rejeita credenciais conhecidas de demonstração ou com baixa entropia
+        # Em produção, rejeita credenciais conhecidas de demonstração ou com baixa entropia (SEC-001)
         if config.e_producao:
             token_limpo = token_enviado.strip()
-            if (
-                token_limpo.lower() in CHAVES_DEMONSTRACAO_INSEGURAS
-                or len(token_limpo) < 16
-            ):
+            if eh_credencial_insegura_producao(token_limpo):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Credencial rejeitada: o ambiente de produção não aceita chaves de demonstração ou com baixa entropia.",

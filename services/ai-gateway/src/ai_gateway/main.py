@@ -10,6 +10,9 @@ from fastapi import FastAPI
 
 from ai_gateway.configuracoes import ConfiguracoesGateway
 from ai_gateway.dependencias import obter_repositorio_memoria
+from ai_gateway.middlewares.cabecalhos_seguranca import (
+    MiddlewareCabecalhosSeguranca,
+)
 from ai_gateway.middlewares.rastreamento import MiddlewareRastreamento
 from ai_gateway.middlewares.tratamento_erros import manipulador_erro_dominio
 from ai_gateway.rotas import (
@@ -67,6 +70,7 @@ def criar_aplicacao(
     aplicacao.state.configuracoes = config
 
     # Middlewares e Tratamento de Exceções
+    aplicacao.add_middleware(MiddlewareCabecalhosSeguranca)
     aplicacao.add_middleware(MiddlewareRastreamento)
     aplicacao.add_exception_handler(ErroDominio, manipulador_erro_dominio)
 

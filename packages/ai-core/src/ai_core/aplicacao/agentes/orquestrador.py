@@ -21,6 +21,7 @@ from ai_core.dominio.modelos.geracao import (
 from ai_core.dominio.modelos.mensagem import Mensagem
 from ai_core.dominio.portas.porta_ferramenta import PortaExecutorFerramentas
 from ai_core.dominio.portas.porta_observabilidade import PortaObservabilidade
+from ai_core.resiliencia.orcamento import PoliticaOrcamentoTokens
 
 
 class OrquestradorAgente:
@@ -32,11 +33,13 @@ class OrquestradorAgente:
         executor_ferramentas: PortaExecutorFerramentas,
         modelo_padrao: str,
         observabilidade: PortaObservabilidade | None = None,
+        politica_orcamento: PoliticaOrcamentoTokens | None = None,
     ) -> None:
         self._roteador = roteador
         self._executor_ferramentas = executor_ferramentas
         self._modelo_padrao = modelo_padrao
         self._observabilidade = observabilidade
+        self._politica_orcamento = politica_orcamento
 
     def _filtrar_ferramentas(
         self, permitidas: tuple[str, ...]
@@ -51,6 +54,7 @@ class OrquestradorAgente:
         objetivo: str,
         configuracao: ConfiguracaoAgente,
         historico_previo: tuple[Mensagem, ...] = (),
+        id_usuario: str | None = None,
     ) -> ResultadoExecucaoAgente:
         """Executa o ciclo de raciocínio e ação do agente até a resolução do objetivo."""
         inicio = time.monotonic()
@@ -63,6 +67,7 @@ class OrquestradorAgente:
             "agente.nome": configuracao.nome,
             "agente.modelo": self._modelo_padrao,
             "agente.limite_passos": configuracao.limite_passos,
+            "agente.id_usuario": id_usuario or "anonimo",
         }
 
         async with rastreador_global.iniciar_span_assincrono(
@@ -100,7 +105,28 @@ class OrquestradorAgente:
                     ferramentas=ferramentas,
                 )
 
-                resposta = await self._roteador.gerar(requisicao)
+                reserva = None
+                if self._politica_orcamento:
+                    estimativa_passo = (
+                        sum(max(1, len(m.conteudo or "") // 4) for m in mensagens_ciclo)
+                        + 256
+                    )
+                    reserva = await self._politica_orcamento.reservar_tokens(
+                        estimativa_passo, id_usuario=id_usuario
+                    )
+
+                try:
+                    resposta = await self._roteador.gerar(requisicao)
+                    if self._politica_orcamento and reserva is not None:
+                        await self._politica_orcamento.confirmar_reserva(
+                            reserva.id_reserva, resposta.uso.total_tokens
+                        )
+                except Exception:
+                    if self._politica_orcamento and reserva is not None:
+                        await self._politica_orcamento.cancelar_reserva(
+                            reserva.id_reserva
+                        )
+                    raise
 
                 tokens_acumulados[0] += resposta.uso.tokens_entrada
                 tokens_acumulados[1] += resposta.uso.tokens_saida

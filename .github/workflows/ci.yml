@@ -2,7 +2,7 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ "main", "develop", "chore/*", "feat/*" ]
+    branches: [ "main", "develop", "chore/*", "feat/*", "fix/*" ]
   pull_request:
     branches: [ "main", "develop" ]
 
@@ -47,6 +47,9 @@ jobs:
 
       - name: Executar Linter e Regras Estáticas (Ruff Check)
         run: uv run ruff check .
+
+      - name: Auditoria de Vulnerabilidades em Dependências (SCA via pip-audit)
+        run: uv run --with pip-audit pip-audit
 
       - name: Executar Bateria de Testes Automatizados (Pytest com PostgreSQL 17 Real)
         env:

@@ -23,6 +23,13 @@ CHAVES_DEMONSTRACAO_INSEGURAS: frozenset[str] = frozenset(
         "chave-servico-confiavel",
         "chave-mestre-teste",
         "chave-secreta-teste",
+        "dev-local-master-key-12345678",
+        "dev-service-m2m-key-12345678",
+        "dev-local-master-key",
+        "dev-service-m2m-key",
+        "segredo-sessao-piloto-desenvolvimento-local-32chars",
+        "postgres_ci_password",
+        "senha_ia_local",
         "teste",
         "test",
         "dev",
@@ -37,6 +44,40 @@ CHAVES_DEMONSTRACAO_INSEGURAS: frozenset[str] = frozenset(
         "padrao",
     }
 )
+
+
+def eh_credencial_insegura_producao(chave: str | None) -> bool:
+    """Valida se uma credencial possui entropia insuficiente ou valores de demonstração/desenvolvimento."""
+    if not chave:
+        return True
+    chave_limpa = chave.strip()
+    if len(chave_limpa) < 16:
+        return True
+    chave_minuscula = chave_limpa.lower()
+    if chave_minuscula in CHAVES_DEMONSTRACAO_INSEGURAS:
+        return True
+    prefixos_bloqueados = (
+        "dev-",
+        "dev_",
+        "teste-",
+        "teste_",
+        "test-",
+        "test_",
+        "demo-",
+        "demo_",
+        "exemplo-",
+        "example-",
+    )
+    if any(chave_minuscula.startswith(p) for p in prefixos_bloqueados):
+        return True
+    termos_bloqueados = (
+        "12345678",
+        "master-key",
+        "chave-padrao",
+        "default-key",
+        "secret-key",
+    )
+    return any(termo in chave_minuscula for termo in termos_bloqueados)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,62 +152,51 @@ class ConfiguracoesGateway:
                 "credenciais válidas (chave_api_mestre ou mapeamento_chaves_usuarios)."
             )
 
-        # Valida chave mestre
-        if self.chave_api_mestre is not None:
-            chave_limpa = self.chave_api_mestre.strip()
-            if len(chave_limpa) < 16:
-                raise ValueError(
-                    "Configuração insegura: a chave_api_mestre para produção deve possuir "
-                    "no mínimo 16 caracteres de entropia."
-                )
-            if chave_limpa.lower() in CHAVES_DEMONSTRACAO_INSEGURAS:
-                raise ValueError(
-                    "Configuração insegura: a chave_api_mestre utiliza um valor de demonstração "
-                    "conhecido ou padrão, não permitido em produção."
-                )
+        # Valida chave mestre (SEC-001)
+        if self.chave_api_mestre is not None and eh_credencial_insegura_producao(
+            self.chave_api_mestre
+        ):
+            raise ValueError(
+                "Configuração insegura: a chave_api_mestre para produção deve possuir "
+                "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração, "
+                "prefixos 'dev-/teste-' ou termos inseguros padrão."
+            )
 
-        # Valida chaves de serviços confiáveis (M2M)
+        # Valida chaves de serviços confiáveis (M2M) (SEC-001)
         for chave_servico in self.chaves_servicos_confiaveis:
-            cs = chave_servico.strip()
-            if len(cs) < 16:
+            if eh_credencial_insegura_producao(chave_servico):
                 raise ValueError(
-                    "Configuração insegura: a chave de serviço M2M para produção deve possuir "
-                    "no mínimo 16 caracteres de entropia."
-                )
-            if cs.lower() in CHAVES_DEMONSTRACAO_INSEGURAS:
-                raise ValueError(
-                    "Configuração insegura: uma das chaves de serviços confiáveis utiliza um valor "
-                    "fraco ou de demonstração não permitido em produção."
+                    "Configuração insegura: a chave de serviços confiáveis (M2M) para produção deve possuir "
+                    "no mínimo 16 caracteres de entropia e não utilizar valores fracos ou de demonstração."
                 )
 
-        # Valida chaves de usuários mapeadas
+        # Valida chaves de usuários mapeadas (SEC-001)
         for chave_usuario in self.mapeamento_chaves_usuarios:
-            cu = chave_usuario.strip()
-            if len(cu) < 16 or cu.lower() in CHAVES_DEMONSTRACAO_INSEGURAS:
+            if eh_credencial_insegura_producao(chave_usuario):
                 raise ValueError(
                     "Configuração insegura: uma das chaves mapeadas para usuários utiliza um valor "
                     "fraco ou de demonstração não permitido em produção."
                 )
 
-        # Validação fail-closed para token de métricas em produção se fornecido
-        if self.metricas_habilitadas and self.metricas_token is not None:
-            token_limpo = self.metricas_token.strip()
-            if (
-                len(token_limpo) < 16
-                or token_limpo.lower() in CHAVES_DEMONSTRACAO_INSEGURAS
-            ):
-                raise ValueError(
-                    "Configuração insegura: o 'metricas_token' para produção deve possuir "
-                    "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração."
-                )
+        # Validação fail-closed para token de métricas em produção se fornecido (SEC-001)
+        if (
+            self.metricas_habilitadas
+            and self.metricas_token is not None
+            and eh_credencial_insegura_producao(self.metricas_token)
+        ):
+            raise ValueError(
+                "Configuração insegura: o 'metricas_token' para produção deve possuir "
+                "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração."
+            )
 
-        # Validação para piloto ativo em produção
-        if self.piloto_ativo and self.piloto_segredo_sessao is not None:
-            segredo_limpo = self.piloto_segredo_sessao.strip()
-            if (
-                len(segredo_limpo) < 16
-                or segredo_limpo.lower() in CHAVES_DEMONSTRACAO_INSEGURAS
-            ):
+        # Validação fail-closed para piloto ativo em produção (SEC-004)
+        if self.piloto_ativo:
+            if not self.piloto_segredo_sessao:
+                raise ValueError(
+                    "Configuração insegura: a aplicação piloto em produção exige a definição "
+                    "explícita de 'GATEWAY_PILOTO_SEGREDO_SESSAO' dedicado para assinatura de cookies."
+                )
+            if eh_credencial_insegura_producao(self.piloto_segredo_sessao):
                 raise ValueError(
                     "Configuração insegura: o 'piloto_segredo_sessao' para produção deve possuir "
                     "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração."

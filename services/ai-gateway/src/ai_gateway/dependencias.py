@@ -30,6 +30,7 @@ from ai_core.dominio.portas.porta_memoria import PortaRepositorioMemoria
 from ai_core.dominio.portas.porta_observabilidade import PortaObservabilidade
 from ai_core.resiliencia.disjuntor import Disjuntor
 from ai_core.resiliencia.limitador import RastreadorConsumoTokens
+from ai_core.resiliencia.orcamento import PoliticaOrcamentoTokens
 from ai_core.resiliencia.retentativa import PoliticaRetentativa
 
 from ai_gateway.configuracoes import ConfiguracoesGateway
@@ -163,8 +164,18 @@ def obter_executor_ferramentas() -> RegistroFerramentas:
     return registro
 
 
+@lru_cache
+def obter_politica_orcamento() -> PoliticaOrcamentoTokens:
+    """Retorna instância singleton da política de orçamento de tokens."""
+    return PoliticaOrcamentoTokens(
+        limite_tokens_por_requisicao=4096,
+        limite_tokens_total_sessao=100_000,
+        limite_tokens_por_usuario=50_000,
+    )
+
+
 def obter_caso_gerar_resposta() -> CasoDeUsoGerarResposta:
-    """Cria o caso de uso para geração síncrona."""
+    """Cria o caso de uso para geração síncrona com controle orçamentário."""
     obs = obter_observabilidade()
     return CasoDeUsoGerarResposta(
         roteador=obter_roteador(),
@@ -177,15 +188,17 @@ def obter_caso_gerar_resposta() -> CasoDeUsoGerarResposta:
             observabilidade=obs,
         ),
         politica_retentativa=PoliticaRetentativa(max_tentativas=3),
+        politica_orcamento=obter_politica_orcamento(),
     )
 
 
 def obter_caso_gerar_fluxo() -> CasoDeUsoGerarRespostaFluxo:
-    """Cria o caso de uso para geração contínua (streaming)."""
+    """Cria o caso de uso para geração contínua (streaming) com controle orçamentário (SEC-006)."""
     return CasoDeUsoGerarRespostaFluxo(
         roteador=obter_roteador(),
         repositorio_memoria=obter_repositorio_memoria(),
         observabilidade=obter_observabilidade(),
+        politica_orcamento=obter_politica_orcamento(),
     )
 
 
@@ -195,11 +208,12 @@ def obter_caso_gerar_saida_estruturada() -> CasoDeUsoGerarSaidaEstruturada:
 
 
 def obter_orquestrador_agente() -> OrquestradorAgente:
-    """Cria o runtime do orquestrador de agentes."""
+    """Cria o runtime do orquestrador de agentes com salvaguarda orçamentária (SEC-003)."""
     config = obter_configuracoes()
     return OrquestradorAgente(
         roteador=obter_roteador(),
         executor_ferramentas=obter_executor_ferramentas(),
         modelo_padrao=config.modelo_padrao,
         observabilidade=obter_observabilidade(),
+        politica_orcamento=obter_politica_orcamento(),
     )

@@ -23,7 +23,7 @@ Construído sob os princípios de **Clean Architecture**, **Arquitetura Hexagona
 1. **`AI Core` (`packages/ai-core`)**:
    - Biblioteca Python de domínio puro, desacoplada de frameworks HTTP e SDKs proprietários.
    - Contratos abstratos agnósticos (`PortaProvedorLLM`, `PortaRepositorioMemoria`, `PortaExecutorFerramentas`, `PortaObservabilidade`).
-   - Adaptadores concretos para **Simulado (Mock)**, **Ollama (local)**, **OpenAI**, **Google Gemini**, **Anthropic** e **DeepSeek**.
+   - Adaptadores concretos para **Simulado (Mock)**, **Ollama (local)**, **OpenAI**, **Google Gemini**, **Anthropic** e **DeepSeek** (com código estruturado e verificado via `MockTransport`; integração ativa em produção exige credenciais fornecidas pelo operador).
    - Persistência conversacional assíncrona em **PostgreSQL 17** (com pool `asyncpg` e migrações versionadas) e **SQLite (modo WAL)** com **isolamento multilocatário e proteção anti-IDOR**.
    - Validador rigoroso de **JSON Schema** com suporte a referências locais (`$defs`, `$ref`) e autorreparo sintático.
    - Suite de resiliência: **Disjuntor (*Circuit Breaker*)**, **Retentativas com Backoff Exponencial e Jitter**, **Protocolo de Reserva de Tokens em Duas Fases** (prevenção contra estouro de cota por requisições concorrentes TOCTOU) e **Fallback Controlado**.
@@ -166,7 +166,7 @@ A confiabilidade da base de código é validada por **159 testes automatizados d
 - **Bateria Pytest**:
   - **155 testes aprovados** localmente em modo unitário/isolado.
   - **4 testes de integração física** com o banco PostgreSQL 17 real (executados com contêiner descartável).
-  - **159 testes aprovados (100%)** na esteira de CI do GitHub Actions com PostgreSQL 17 real como serviço.
+  - **159 testes aprovados (100% de taxa de aprovação dos testes coletados)** na esteira de CI do GitHub Actions com PostgreSQL 17 real como serviço (esta métrica comprova o sucesso funcional de todos os cenários especificados e não deve ser confundida com cobertura total de código por linhas/ramos via pytest-cov).
 - **Análise Estática e Linter**: 100% aprovado pelo `ruff` sem alertas.
 - **Segurança da Cadeia de Suprimentos (SCA)**: `pip-audit` executado no CI com **0 vulnerabilidades conhecidas**.
 - **Higiene Docker**: `.dockerignore` configurado para impedir o envio acidental de arquivos de auditoria ou testes para o contêiner de produção.
@@ -179,8 +179,8 @@ A confiabilidade da base de código é validada por **159 testes automatizados d
    - A `PoliticaOrcamentoTokens` e o `LimitadorTaxa` utilizam locks em memória volátil (`asyncio.Lock()`). Em implantações horizontais com múltiplos contêineres/pods ou múltiplos workers, as quotas são aplicadas por processo, não garantindo teto consolidado sem um coordenador de estado distribuído (ex: Redis).
 2. **Terminação TLS e Reverse Proxies de Borda**:
    - Para prevenir *HSTS Spoofing* (RFC 6797 Sec 7.2), o Gateway não confia cegamente no cabeçalho `X-Forwarded-Proto` de clientes diretos. Em topologias corporativas atrás de balanceadores/proxies (Cloudflare, AWS ALB, Nginx), o servidor Uvicorn deve ser configurado com `--proxy-headers` e `--forwarded-allow-ips`.
-3. **Escopo dos Testes**:
-   - A qualidade é comprovada por testes determinísticos, testes de integração e auditoria estática com a Cloudflare Security Audit Skill. Testes dinâmicos de carga (DAST) e testes de estresse distribuídos devem ser conduzidos em ambiente de homologação dedicado.
+3. **Escopo dos Testes e Auditoria**:
+   - A qualidade é comprovada por testes determinísticos, testes de integração real com banco e revisão estática estrutural orientada pela Cloudflare Security Audit Skill. Não constitui certificação formal de segurança (ex: ISO 27001 ou SOC 2) nem substitui testes dinâmicos de intrusão (*penetration test* ou DAST) e testes de estresse em ambiente de homologação dedicado.
 
 ---
 

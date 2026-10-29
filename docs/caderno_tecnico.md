@@ -43,9 +43,9 @@ A explosão do consumo de Modelos de Linguagem de Larga Escala (LLMs) levou inú
 
 ### 1.2 Exemplos Práticos no Projeto
 O projeto endereça essas dores reais nas seguintes frentes:
-- **Prevenção de Esgotamento Orçamentário**: Implementada no protocolo de reserva em duas fases na [`PoliticaOrcamentoTokens`](file:///C:/Users/Airton/reusable-ai-backend-architecture/packages/ai-core/src/ai_core/resiliencia/orcamento.py).
-- **Proteção contra IDOR Relacional**: Implementada na verificação de posse do usuário no [`MemoriaPostgresql`](file:///C:/Users/Airton/reusable-ai-backend-architecture/packages/ai-core/src/ai_core/adaptadores/memoria/memoria_postgresql.py).
-- **Eliminação de DOM XSS**: Implementada na higienização de saída na SPA do piloto em [`piloto.py`](file:///C:/Users/Airton/reusable-ai-backend-architecture/services/ai-gateway/src/ai_gateway/rotas/piloto.py).
+- **Prevenção de Esgotamento Orçamentário**: Implementada no protocolo de reserva em duas fases na [`PoliticaOrcamentoTokens`](../packages/ai-core/src/ai_core/resiliencia/orcamento.py).
+- **Proteção contra IDOR Relacional**: Implementada na verificação de posse do usuário no [`MemoriaPostgresql`](../packages/ai-core/src/ai_core/adaptadores/memoria/memoria_postgresql.py).
+- **Eliminação de DOM XSS**: Implementada na higienização de saída na SPA do piloto em [`piloto.py`](../services/ai-gateway/src/ai_gateway/rotas/piloto.py).
 
 ### 1.3 Conceitos Técnicos Importantes
 - **TOCTOU (*Time-Of-Check to Time-Of-Use*)**: Condição de corrida onde múltiplas requisições simultâneas verificam que há saldo orçamentário disponível e disparam juntas antes que o saldo seja decrementado, estourando a cota orçamentária da sessão.
@@ -53,7 +53,7 @@ O projeto endereça essas dores reais nas seguintes frentes:
 
 ### 1.4 Questões de Revisão e Exercício Prático
 - **Pergunta**: Por que verificar o saldo de tokens antes da requisição não é suficiente sem um mecanismo de reserva atômica?
-- **Exercício Prático**: Inspecione o teste [`test_sec006_streaming_reserva_e_consome_tokens_no_orcamento`](file:///C:/Users/Airton/reusable-ai-backend-architecture/tests/test_remediacao_auditoria_seguranca.py) e observe como a cota estimada é retida antes do primeiro chunk do streaming.
+- **Exercício Prático**: Inspecione o teste [`test_sec006_streaming_reserva_e_consome_tokens_no_orcamento`](../tests/test_remediacao_auditoria_seguranca.py) e observe como a cota estimada é retida antes do primeiro chunk do streaming.
 
 ---
 
@@ -66,14 +66,14 @@ A solução construída não é um mero *wrapper* de chamadas HTTP. É uma arqui
 2. **`AI Gateway` (`services/ai-gateway`)**: O serviço de borda HTTP construído com FastAPI, responsável por autenticação de alta entropia, cabeçalhos de segurança, auditoria anti-spoofing, métricas Prometheus e camada BFF.
 
 ### 2.2 Características Distintivas da Solução
-- **Custo Zero para Desenvolvimento e Homologação**: A arquitetura opera 100% offline utilizando o [`AdaptadorSimulado`](file:///C:/Users/Airton/reusable-ai-backend-architecture/packages/ai-core/src/ai_core/adaptadores/provedores/simulado.py) e inferência local via [`AdaptadorOllama`](file:///C:/Users/Airton/reusable-ai-backend-architecture/packages/ai-core/src/ai_core/adaptadores/provedores/ollama.py). Nenhum centavo é gasto em testes automatizados.
+- **Custo Zero para Desenvolvimento e Homologação**: A arquitetura opera 100% offline utilizando o [`AdaptadorSimulado`](../packages/ai-core/src/ai_core/adaptadores/provedores/simulado.py) e inferência local via [`AdaptadorOllama`](../packages/ai-core/src/ai_core/adaptadores/provedores/ollama.py). Nenhum centavo é gasto em testes automatizados.
 - **Defesas Criptográficas Nativas**: Uso de HMAC-SHA256 para assinatura de sessões web e tokens anti-CSRF, comparação em tempo constante com `hmac.compare_digest` e geração segura via `secrets`.
 - **Persistência Relacional Corporativa**: Histórico mantido no **PostgreSQL 17** com particionamento lógico por usuário, pool de conexões assíncrono e migrações idempotentes no startup.
 
 ### 2.3 Referências aos Arquivos Reais
-- **Caso de Uso de Streaming Resiliente**: [`caso_gerar_fluxo.py`](file:///C:/Users/Airton/reusable-ai-backend-architecture/packages/ai-core/src/ai_core/aplicacao/casos_de_uso/caso_gerar_fluxo.py)
-- **Middleware de Cabeçalhos de Borda**: [`cabecalhos_seguranca.py`](file:///C:/Users/Airton/reusable-ai-backend-architecture/services/ai-gateway/src/ai_gateway/middlewares/cabecalhos_seguranca.py)
-- **Interface Gráfica e BFF**: [`piloto.py`](file:///C:/Users/Airton/reusable-ai-backend-architecture/services/ai-gateway/src/ai_gateway/rotas/piloto.py)
+- **Caso de Uso de Streaming Resiliente**: [`caso_gerar_fluxo.py`](../packages/ai-core/src/ai_core/aplicacao/casos_de_uso/caso_gerar_fluxo.py)
+- **Middleware de Cabeçalhos de Borda**: [`cabecalhos_seguranca.py`](../services/ai-gateway/src/ai_gateway/middlewares/cabecalhos_seguranca.py)
+- **Interface Gráfica e BFF**: [`piloto.py`](../services/ai-gateway/src/ai_gateway/rotas/piloto.py)
 
 ---
 
@@ -136,7 +136,7 @@ graph TD
 ```
 
 ### 4.2 Nomenclatura em Português Brasileiro Culto
-Conforme a [ADR 0002](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0002-nomenclatura-em-portugues-brasileiro.md), todo o código-fonte proprietário, módulos, classes, métodos e variáveis utilizam o português brasileiro culto e idiomático (`CasoDeUsoGerarResposta`, `PoliticaOrcamentoTokens`, `Disjuntor`, `id_usuario`).
+Conforme a [ADR 0002](adr/0002-nomenclatura-em-portugues-brasileiro.md), todo o código-fonte proprietário, módulos, classes, métodos e variáveis utilizam o português brasileiro culto e idiomático (`CasoDeUsoGerarResposta`, `PoliticaOrcamentoTokens`, `Disjuntor`, `id_usuario`).
 - **Por quê?** Elimina a ambiguidade semântica de traduções literais truncadas, valoriza a clareza conceitual na modelagem de domínio e estabelece uma Linguagem Ubíqua (*Ubiquitous Language*) cristalina para equipes de engenharia de software locais.
 
 ---
@@ -181,8 +181,11 @@ pie title Distribuição dos Testes Automatizados (159 Cenários)
     "Outros (Domínio, Provedores, Schemas)" : 42
 ```
 
+> [!NOTE]
+> **Taxa de Aprovação vs Cobertura de Código**: O índice de 100% de aprovação (159 de 159 testes no CI) refere-se exclusivamente à taxa de sucesso dos cenários de teste automatizados implementados no repositório. Essa métrica comprova a eficácia das regras testadas, mas não deve ser confundida com cobertura total de código por linhas/ramos (*code coverage* medido via `pytest-cov`), cuja medição formal não faz parte do pipeline padrão.
+
 ### 6.2 Testes em Ambiente Real no CI (GitHub Actions)
-No arquivo [`.github/workflows/ci.yml`](file:///C:/Users/Airton/reusable-ai-backend-architecture/.github/workflows/ci.yml):
+No arquivo [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
 - Um contêiner oficial `postgres:17-alpine` é instanciado em modo serviço.
 - O CI roda com `POSTGRES_OBRIGATORIO=true`, validando a criação física de tabelas, o pool `asyncpg`, a concorrência de conexões e a prevenção relacional de IDOR.
 - Etapas automáticas de `ruff format --check`, `ruff check` e `pip-audit` barram commits com problemas de estilo, regras estáticas ou CVEs conhecidas.
@@ -231,8 +234,8 @@ flowchart LR
 4. **Homologação e Autorização**: Nenhuma linha de código foi integrada à branch `main` sem validação, inspeção e aprovação explícita do responsável pelo projeto.
 
 ### 7.3 Onde a IA Agregou Alto Valor?
-- **Velocidade de Execução e Consistência**: Implementação fluida de dezenas de classes, mapeamento de contratos Pydantic, escrita meticulosa de 159 testes unitários e de integração, garantindo 100% de cobertura nos cenários especificados.
-- **Investigação Estática Sistemática**: Utilização da Cloudflare Security Audit Skill para percorrer linha a linha a base de código à caça de padrões de vulnerabilidades.
+- **Velocidade de Execução e Consistência**: Implementação fluida de dezenas de classes, mapeamento de contratos Pydantic, escrita meticulosa de 159 testes unitários e de integração, alcançando 100% de taxa de aprovação dos testes coletados para os cenários especificados (sem confundir taxa de sucesso de testes com cobertura total de código/linhas).
+- **Investigação Estática Sistemática**: Utilização da Cloudflare Security Audit Skill para percorrer a base de código à caça de vulnerabilidades estruturais (revisão estática orientada pela skill, sem constituir certificação formal acreditada de segurança).
 - **Refatoração Semântica Contínua**: Aplicação consistente de padrões de linter e documentação em tempo recorde.
 
 ---

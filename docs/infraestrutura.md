@@ -171,6 +171,6 @@ Para depuração de baixo nível sem contêineres:
 
 ## 5. Referências
 
-- [ADR 0008: Conteinerização, Docker Compose e Orquestração Local](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md)
-- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0011-auditoria-e-remediacao-de-seguranca.md)
-- [Guia de Observabilidade e Monitoramento](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/observabilidade.md)
+- [ADR 0008: Conteinerização, Docker Compose e Orquestração Local](adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md)
+- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](adr/0011-auditoria-e-remediacao-de-seguranca.md)
+- [Guia de Observabilidade e Monitoramento](observabilidade.md)

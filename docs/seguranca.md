@@ -148,13 +148,16 @@ A execução autônoma de ferramentas por modelos de IA apresenta riscos de *Pro
 3. **Gestão de Segredos**:
    - As variáveis sensíveis devem ser injetadas por cofres gerenciados (HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager).
 
+4. **Escopo da Auditoria e Ausência de Certificação Formal**:
+   - A revisão de segurança realizada baseou-se em auditoria estática e estrutural orientada pela Cloudflare Security Audit Skill. Não constitui certificação formal de conformidade (como ISO 27001 ou SOC 2) nem substitui testes de intrusão (*penetration tests* ou DAST) em ambiente de homologação dedicado.
+
 ---
 
 ## 11. Referências
 
-- [ADR 0004: Validação Rigorosa e Defesas de Borda](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
-- [ADR 0005: Isolamento Multilocatário e Autorização de Conversas](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0005-isolamento-multilocatario-e-autorizacao-conversas.md)
-- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
-- [ADR 0007: Protocolo de Reserva Atômica de Tokens em Duas Fases](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0007-reserva-atomica-de-tokens-em-duas-fases.md)
-- [ADR 0010: Aplicação Piloto e Interface BFF Segura](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
-- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0011-auditoria-e-remediacao-de-seguranca.md)
+- [ADR 0004: Validação Rigorosa e Defesas de Borda](adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
+- [ADR 0005: Isolamento Multilocatário e Autorização de Conversas](adr/0005-isolamento-multilocatario-e-autorizacao-conversas.md)
+- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
+- [ADR 0007: Protocolo de Reserva Atômica de Tokens em Duas Fases](adr/0007-reserva-atomica-de-tokens-em-duas-fases.md)
+- [ADR 0010: Aplicação Piloto e Interface BFF Segura](adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
+- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](adr/0011-auditoria-e-remediacao-de-seguranca.md)

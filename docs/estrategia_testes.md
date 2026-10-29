@@ -66,9 +66,12 @@ A base de testes conta com **25 arquivos de teste** cobrindo todas as camadas da
   - **Falhas**: 0.
 - **Execução no GitHub Actions (com serviço PostgreSQL 17 Alpine)**:
   - **Coletados**: 159 testes.
-  - **Aprovados**: 159 testes (100% de cobertura funcional).
+  - **Aprovados**: 159 testes (100% de taxa de aprovação dos testes coletados).
   - **Ignorados**: 0.
   - **Falhas**: 0.
+
+> [!NOTE]
+> **Esclarecimento sobre Métricas de Qualidade**: O percentual de 100% de aprovação refere-se estritamente à proporção de testes coletados pelo Pytest que obtiveram sucesso na execução. Essa métrica de taxa de sucesso funcional comprova a validade de todos os cenários especificados, mas não deve ser equiparada a métricas de cobertura de código por linhas/ramos (*code coverage* medido via `pytest-cov`), que exigem instrumentação e relatórios adicionais.
 
 ---
 
@@ -122,7 +125,7 @@ uv run ruff format .
 
 ## 6. Referências
 
-- [ADR 0004: Validação Rigorosa e Defesas de Borda](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
-- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
-- [ADR 0010: Aplicação Piloto e Interface BFF Segura](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
-- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0011-auditoria-e-remediacao-de-seguranca.md)
+- [ADR 0004: Validação Rigorosa e Defesas de Borda](adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
+- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
+- [ADR 0010: Aplicação Piloto e Interface BFF Segura](adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
+- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](adr/0011-auditoria-e-remediacao-de-seguranca.md)

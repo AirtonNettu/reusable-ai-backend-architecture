@@ -245,28 +245,31 @@ A arquitetura implementa o desacoplamento de provedores através da `PortaProved
 |---|---|---|---|---|
 | **Simulado (Mock)** | `AdaptadorSimulado` | Memória / Determinístico | **Implementado** | **Totalmente Verificado** (utilizado na suíte de testes e na aplicação piloto com custo zero). |
 | **Ollama** | `AdaptadorOllama` | HTTP REST (`/api/chat`, `/api/generate`) | **Implementado** | **Verificado Localmente** (via perfil Docker `ollama` com modelos locais). |
-| **OpenAI** | `AdaptadorOpenAI` | HTTP REST / SSE (`/v1/chat/completions`) | **Implementado** | **Verificado via MockTransport** (pronto para produção mediante inserção de chave `OPENAI_API_KEY`). |
-| **Google Gemini** | `AdaptadorGemini` | HTTP REST (`models.generateContent`) | **Implementado** | **Verificado via MockTransport** (pronto para produção mediante inserção de `GEMINI_API_KEY`). |
-| **Anthropic** | `AdaptadorAnthropic` | HTTP REST (`/v1/messages`) | **Implementado** | **Verificado via MockTransport** (pronto para produção mediante inserção de `ANTHROPIC_API_KEY`). |
-| **DeepSeek** | `AdaptadorDeepSeek` | HTTP REST compatível OpenAI | **Implementado** | **Verificado via MockTransport** (pronto para produção mediante inserção de `DEEPSEEK_API_KEY`). |
+| **OpenAI** | `AdaptadorOpenAI` | HTTP REST / SSE (`/v1/chat/completions`) | **Implementado** | **Verificado via MockTransport** (contrato HTTP validado unitariamente; integração física com a API comercial em produção requer credencial válida do operador e homologação de tráfego real). |
+| **Google Gemini** | `AdaptadorGemini` | HTTP REST (`models.generateContent`) | **Implementado** | **Verificado via MockTransport** (contrato HTTP validado unitariamente; integração física com a API comercial em produção requer credencial válida do operador e homologação de tráfego real). |
+| **Anthropic** | `AdaptadorAnthropic` | HTTP REST (`/v1/messages`) | **Implementado** | **Verificado via MockTransport** (contrato HTTP validado unitariamente; integração física com a API comercial em produção requer credencial válida do operador e homologação de tráfego real). |
+| **DeepSeek** | `AdaptadorDeepSeek` | HTTP REST compatível OpenAI | **Implementado** | **Verificado via MockTransport** (contrato HTTP validado unitariamente; integração física com a API comercial em produção requer credencial válida do operador e homologação de tráfego real). |
+
+> [!NOTE]
+> **Distinção entre Prontidão de Código e Integração em Nuvem**: Todos os adaptadores proprietários possuem lógica completa de serialização, desserialização, cabeçalhos e tratamento de erro, verificados com `MockTransport` (HTTPX) em testes automatizados. Nenhuma chamada externa a APIs comerciais pagas foi executada durante os testes e CI para assegurar custo financeiro zero e isolamento determinístico.
 
 ---
 
 ## 7. Referência aos Registros de Decisão de Arquitetura (ADRs)
 
-Todas as decisões arquiteturais fundamentais estão formalizadas no diretório [`docs/adr/`](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/):
+Todas as decisões arquiteturais fundamentais estão formalizadas no diretório [`docs/adr/`](adr/):
 
-- [ADR 0001: Arquitetura Híbrida e Padrão Hexagonal](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0001-arquitetura-hibrida-hexagonal.md)
-- [ADR 0002: Nomenclatura em Português Brasileiro Culto](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0002-nomenclatura-em-portugues-brasileiro.md)
-- [ADR 0003: Política de Resiliência, Disjuntor e Fallback](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0003-politica-resiliencia-disjuntor-e-fallback.md)
-- [ADR 0004: Validação Rigorosa e Defesas de Borda](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
-- [ADR 0005: Isolamento Multilocatário e Autorização de Conversas](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0005-isolamento-multilocatario-e-autorizacao-conversas.md)
-- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
-- [ADR 0007: Protocolo de Reserva Atômica de Tokens em Duas Fases](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0007-reserva-atomica-de-tokens-em-duas-fases.md)
-- [ADR 0008: Conteinerização, Docker Compose e Orquestração Local](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md)
-- [ADR 0009: Observabilidade, Prometheus, OpenTelemetry e Rastreamento](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0009-observabilidade-prometheus-opentelemetry-e-rastreamento-distribuido.md)
-- [ADR 0010: Aplicação Piloto e Interface BFF Segura](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
-- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](file:///C:/Users/Airton/reusable-ai-backend-architecture/docs/adr/0011-auditoria-e-remediacao-de-seguranca.md)
+- [ADR 0001: Arquitetura Híbrida e Padrão Hexagonal](adr/0001-arquitetura-hibrida-hexagonal.md)
+- [ADR 0002: Nomenclatura em Português Brasileiro Culto](adr/0002-nomenclatura-em-portugues-brasileiro.md)
+- [ADR 0003: Política de Resiliência, Disjuntor e Fallback](adr/0003-politica-resiliencia-disjuntor-e-fallback.md)
+- [ADR 0004: Validação Rigorosa e Defesas de Borda](adr/0004-validacao-rigorosa-e-defesas-de-borda.md)
+- [ADR 0005: Isolamento Multilocatário e Autorização de Conversas](adr/0005-isolamento-multilocatario-e-autorizacao-conversas.md)
+- [ADR 0006: Controle de Identidade Anti-Spoofing e Persistência PostgreSQL](adr/0006-controle-identidade-anti-spoofing-e-persistencia-postgresql.md)
+- [ADR 0007: Protocolo de Reserva Atômica de Tokens em Duas Fases](adr/0007-reserva-atomica-de-tokens-em-duas-fases.md)
+- [ADR 0008: Conteinerização, Docker Compose e Orquestração Local](adr/0008-conteinerizacao-docker-compose-e-orquestracao-local.md)
+- [ADR 0009: Observabilidade, Prometheus, OpenTelemetry e Rastreamento](adr/0009-observabilidade-prometheus-opentelemetry-e-rastreamento-distribuido.md)
+- [ADR 0010: Aplicação Piloto e Interface BFF Segura](adr/0010-aplicacao-piloto-e-interface-bff-segura.md)
+- [ADR 0011: Auditoria Estática e Remediação Conclusiva de Segurança](adr/0011-auditoria-e-remediacao-de-seguranca.md)
 
 ---
 

@@ -23,7 +23,7 @@ Engineered around **Clean Architecture**, **Hexagonal Architecture (Ports and Ad
 1. **`AI Core` (`packages/ai-core`)**:
    - Transport-agnostic, pure Python domain library decoupled from HTTP frameworks and external vendor SDKs.
    - Abstract contracts (`PortaProvedorLLM`, `PortaRepositorioMemoria`, `PortaExecutorFerramentas`, `PortaObservabilidade`).
-   - Concrete production-ready adapters for **Mock/Simulated**, **Ollama (local)**, **OpenAI**, **Google Gemini**, **Anthropic**, and **DeepSeek**.
+   - Concrete adapters for **Mock/Simulated**, **Ollama (local)**, **OpenAI**, **Google Gemini**, **Anthropic**, and **DeepSeek** (architecture implemented and verified via `MockTransport`; live cloud production requires operator-supplied credentials).
    - Asynchronous conversational persistence in **PostgreSQL 17** (via `asyncpg` pool and versioned migrations) and **SQLite (WAL mode)** featuring **multi-tenant isolation and anti-IDOR checks**.
    - Resilient **JSON Schema validator** supporting `$defs`, `$ref`, and syntactic auto-repair.
    - Full resilience suite: **Circuit Breaker**, **Exponential Backoff Retries with Jitter**, **Two-Phase Token Reservation Protocol** (preventing TOCTOU race conditions and cancellation leaks), and **Managed Fallback**.
@@ -166,7 +166,7 @@ Codebase reliability is backed by **159 deterministic automated tests** and cont
 - **Pytest Suite**:
   - **155 passing tests** locally in isolated unit mode.
   - **4 physical integration tests** with live PostgreSQL 17 (run via disposable container).
-  - **159 passing tests (100%)** in the GitHub Actions CI pipeline with live PostgreSQL 17 service.
+  - **159 passing tests (100% pass rate among collected tests)** in the GitHub Actions CI pipeline with live PostgreSQL 17 service (this metric represents functional test execution pass rate and should not be conflated with full line/branch code coverage via pytest-cov).
 - **Static Analysis & Linting**: 100% compliant with `ruff`.
 - **Software Supply Chain Security (SCA)**: `pip-audit` runs on every CI push reporting **0 known vulnerabilities**.
 - **Docker Hygiene**: `.dockerignore` excludes internal audit artifacts and skills from production images.
@@ -179,8 +179,8 @@ Codebase reliability is backed by **159 deterministic automated tests** and cont
    - `PoliticaOrcamentoTokens` and `LimitadorTaxa` use in-memory asynchronous locks (`asyncio.Lock()`). In multi-replica or multi-worker deployments, quotas apply per process. Distributed clustering requires an external coordinator (e.g., Redis).
 2. **Reverse Proxy Configuration for HSTS**:
    - To prevent *HSTS Spoofing* (RFC 6797 Sec 7.2), the Gateway does not trust raw `X-Forwarded-Proto` headers from direct clients. When deployed behind load balancers (Cloudflare, AWS ALB, Nginx), Uvicorn must be configured with `--proxy-headers` and `--forwarded-allow-ips`.
-3. **Testing Scope**:
-   - Current verification relies on deterministic unit and integration tests and static security audits with the Cloudflare Security Audit Skill. Dynamic application security testing (DAST) and distributed load tests should be conducted in staging environments prior to public exposure.
+3. **Testing and Audit Scope**:
+   - Reliability and security are supported by deterministic unit tests, physical database integration tests, and static security reviews guided by the Cloudflare Security Audit Skill. This does not represent formal compliance certification (such as ISO 27001 or SOC 2) nor does it substitute for dynamic penetration testing (pentesting/DAST) in a dedicated staging environment.
 
 ---
 

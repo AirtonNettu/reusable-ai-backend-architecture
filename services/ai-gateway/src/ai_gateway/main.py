@@ -15,9 +15,11 @@ from ai_gateway.middlewares.tratamento_erros import manipulador_erro_dominio
 from ai_gateway.rotas import (
     roteador_agentes,
     roteador_conclusoes,
+    roteador_conversas,
     roteador_estruturado,
     roteador_metricas,
     roteador_modelos,
+    roteador_piloto,
     roteador_saude,
 )
 
@@ -75,6 +77,8 @@ def criar_aplicacao(
     aplicacao.include_router(roteador_conclusoes)
     aplicacao.include_router(roteador_estruturado)
     aplicacao.include_router(roteador_agentes)
+    aplicacao.include_router(roteador_conversas)
+    aplicacao.include_router(roteador_piloto)
 
     return aplicacao
 

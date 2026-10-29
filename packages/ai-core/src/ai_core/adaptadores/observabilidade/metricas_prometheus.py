@@ -36,6 +36,12 @@ class MetricasPrometheus(PortaObservabilidade):
         )
 
         # Métricas de execução de Modelos LLM
+        self.llm_requisicoes_total = Counter(
+            "llm_requisicoes_total",
+            "Total de requisições de inferência processadas por modelo.",
+            ["modelo"],
+            registry=self._registry,
+        )
         self.llm_execucao_duracao_segundos = Histogram(
             "llm_execucao_duracao_segundos",
             "Duração da inferência do modelo LLM em segundos.",
@@ -106,6 +112,9 @@ class MetricasPrometheus(PortaObservabilidade):
         """Mapeia contagens genéricas da porta para contadores Prometheus correspondentes."""
         tags = tags or {}
         if nome in ("requisicoes_geracao_total", "llm_requisicoes_total"):
+            modelo = tags.get("modelo", "desconhecido")
+            self.llm_requisicoes_total.labels(modelo=modelo).inc(valor)
+        elif nome in ("tokens_total", "llm_tokens_total"):
             modelo = tags.get("modelo", "desconhecido")
             tipo = tags.get("tipo", "total")
             self.llm_tokens_total.labels(modelo=modelo, tipo=tipo).inc(valor)
@@ -187,13 +196,16 @@ class MetricasPrometheus(PortaObservabilidade):
     def registrar_tokens(
         self, modelo: str, tokens_entrada: int, tokens_saida: int
     ) -> None:
-        """Registra os tokens consumidos na inferência segregados por direção."""
+        """Registra os tokens consumidos na inferência segregados por direção e total real."""
         if tokens_entrada > 0:
             self.llm_tokens_total.labels(modelo=modelo, tipo="entrada").inc(
                 tokens_entrada
             )
         if tokens_saida > 0:
             self.llm_tokens_total.labels(modelo=modelo, tipo="saida").inc(tokens_saida)
+        total_tokens = tokens_entrada + tokens_saida
+        if total_tokens > 0:
+            self.llm_tokens_total.labels(modelo=modelo, tipo="total").inc(total_tokens)
 
     def registrar_falha_llm(self, modelo: str, tipo_erro: str) -> None:
         """Registra uma falha de geração do modelo por tipo de erro."""

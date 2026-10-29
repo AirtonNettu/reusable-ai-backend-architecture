@@ -659,3 +659,32 @@ def test_sanitizar_mensagem_erro_regras_e_truncamento() -> None:
     # 4. Mensagem sem segredos permanece intacta
     msg_limpa = "Erro de conexão timeout após 5.0 segundos"
     assert sanitizar_mensagem_erro(msg_limpa) == msg_limpa
+
+
+def test_regressao_metricas_tokens_total_versus_requisicoes_total() -> None:
+    """Garante que requisições contam em llm_requisicoes_total e tokens_total reflete soma real de tokens."""
+    reg = CollectorRegistry(auto_describe=True)
+    metricas = MetricasPrometheus(registry=reg)
+
+    # 1. Simula 2 requisições de geração
+    metricas.registrar_contagem(
+        "requisicoes_geracao_total", tags={"modelo": "modelo-teste"}
+    )
+    metricas.registrar_contagem(
+        "requisicoes_geracao_total", tags={"modelo": "modelo-teste"}
+    )
+
+    # 2. Simula o consumo real de tokens (120 entrada, 45 saída)
+    metricas.registrar_tokens("modelo-teste", tokens_entrada=120, tokens_saida=45)
+
+    saida = metricas.gerar_exposicao_prometheus().decode("utf-8")
+
+    # 3. llm_requisicoes_total deve ser 2.0
+    assert 'llm_requisicoes_total{modelo="modelo-teste"} 2.0' in saida
+
+    # 4. llm_tokens_total deve ter valores reais e tipo="total" deve ser a soma (165.0)
+    assert 'llm_tokens_total{modelo="modelo-teste",tipo="entrada"} 120.0' in saida
+    assert 'llm_tokens_total{modelo="modelo-teste",tipo="saida"} 45.0' in saida
+    assert 'llm_tokens_total{modelo="modelo-teste",tipo="total"} 165.0' in saida
+    # Não deve ter 2.0 em llm_tokens_total
+    assert 'llm_tokens_total{modelo="modelo-teste",tipo="total"} 2.0' not in saida

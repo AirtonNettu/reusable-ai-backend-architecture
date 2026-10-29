@@ -64,6 +64,8 @@ class ConfiguracoesGateway:
     otel_habilitado: bool = True
     otel_endpoint_otlp: str | None = None
     otel_nome_servico: str = "ai-gateway"
+    piloto_habilitado: bool | None = None
+    piloto_segredo_sessao: str | None = None
 
     def __post_init__(self) -> None:
         """Valida que o ambiente configurado é reconhecido, evitando fallback silencioso."""
@@ -89,6 +91,13 @@ class ConfiguracoesGateway:
     def e_producao(self) -> bool:
         """Indica se a instância está operando em ambiente de produção estrito."""
         return self.ambiente.strip().lower() in AMBIENTES_PRODUCAO
+
+    @property
+    def piloto_ativo(self) -> bool:
+        """Determina se a aplicação piloto e suas rotas BFF estão ativas (fail-closed em produção)."""
+        if self.piloto_habilitado is not None:
+            return self.piloto_habilitado
+        return not self.e_producao
 
     def validar_seguranca_producao(self) -> None:
         """Executa validação fail-closed impedindo inicialização insegura em produção."""
@@ -151,6 +160,18 @@ class ConfiguracoesGateway:
                     "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração."
                 )
 
+        # Validação para piloto ativo em produção
+        if self.piloto_ativo and self.piloto_segredo_sessao is not None:
+            segredo_limpo = self.piloto_segredo_sessao.strip()
+            if (
+                len(segredo_limpo) < 16
+                or segredo_limpo.lower() in CHAVES_DEMONSTRACAO_INSEGURAS
+            ):
+                raise ValueError(
+                    "Configuração insegura: o 'piloto_segredo_sessao' para produção deve possuir "
+                    "no mínimo 16 caracteres de entropia e não utilizar valores de demonstração."
+                )
+
     @classmethod
     def carregar_do_ambiente(cls) -> "ConfiguracoesGateway":
         """Instancia configurações a partir de variáveis de ambiente com validação estrita."""
@@ -194,4 +215,10 @@ class ConfiguracoesGateway:
             in ("true", "1", "yes"),
             otel_endpoint_otlp=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
             otel_nome_servico=os.getenv("OTEL_SERVICE_NAME", "ai-gateway"),
+            piloto_habilitado=(
+                os.getenv("GATEWAY_PILOTO_HABILITADO").lower() in ("true", "1", "yes")
+                if os.getenv("GATEWAY_PILOTO_HABILITADO") is not None
+                else None
+            ),
+            piloto_segredo_sessao=os.getenv("GATEWAY_PILOTO_SEGREDO_SESSAO"),
         )

@@ -39,3 +39,8 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# Ferramentas e workspaces locais de desenvolvimento
+.agents/
+skills-lock.json
+demonstracao/

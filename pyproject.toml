@@ -1,7 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
 
 [project]
 name = "reusable-ai-backend-architecture"
 version = "0.1.0"
+description = "Plataforma corporativa reutilizável e desacoplada para aplicações de IA"
+license = "Apache-2.0"
 requires-python = ">=3.13,<3.15"
 dependencies = []
 
